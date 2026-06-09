@@ -21,6 +21,7 @@ export interface Event {
   status: 'draft' | 'published' | 'cancelled' | 'completed';
   version: number;
   created_at: Date;
+  [key: string]: unknown;
 }
 
 export interface Seat {
@@ -46,6 +47,7 @@ export interface Booking {
   created_at: Date;
   expires_at: Date;
   confirmed_at: Date | null;
+  [key: string]: unknown;
 }
 
 export interface BookingAuditLog {

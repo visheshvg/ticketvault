@@ -55,7 +55,7 @@ export class EventService {
 
   calculatePrice(basePrice: number, availableSeats: number, totalSeats: number): number {
     const ratio = availableSeats / totalSeats;
-    const tiers: PriceTier[] = config.pricing.tiers;
+    const tiers: readonly PriceTier[] = config.pricing.tiers;
     for (const tier of tiers) {
       if (ratio >= tier.threshold) {
         return Math.round(basePrice * tier.multiplier * 100) / 100;

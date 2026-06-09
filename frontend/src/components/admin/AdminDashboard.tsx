@@ -5,8 +5,8 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
 } from 'recharts';
 import {
-  DollarSign, Users, Clock, AlertTriangle, Activity, RefreshCw,
-  ChevronRight, CheckCircle, XCircle, AlertCircle, Database, Inbox,
+  DollarSign, Clock, AlertTriangle, Activity, RefreshCw,
+  ChevronRight, CheckCircle, XCircle, AlertCircle, Inbox,
 } from 'lucide-react';
 import { toast } from '../common/Toast';
 import { format } from 'date-fns';
