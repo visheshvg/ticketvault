@@ -75,15 +75,22 @@ router.post('/login', async (req: Request, res: Response) => {
 
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
-    const newFailCount = user.failed_logins + 1;
+    const incremented = await pool.query<{ failed_logins: number }>(
+      `UPDATE users
+          SET failed_logins = failed_logins + 1,
+              locked_until = CASE
+                WHEN failed_logins + 1 >= $1 THEN now() + ($2 || ' minutes')::interval
+                ELSE locked_until
+              END
+        WHERE id = $3
+        RETURNING failed_logins`,
+      [MAX_FAILED_LOGINS, LOCKOUT_MINUTES.toString(), user.id]
+    );
+
+    const newFailCount = incremented.rows[0]?.failed_logins ?? 0;
     if (newFailCount >= MAX_FAILED_LOGINS) {
-      await pool.query(
-        `UPDATE users SET failed_logins = $1, locked_until = now() + interval '${LOCKOUT_MINUTES} minutes' WHERE id = $2`,
-        [newFailCount, user.id]
-      );
       return res.status(401).json({ error: `Too many failed attempts. Account locked for ${LOCKOUT_MINUTES} minutes.` });
     }
-    await pool.query(`UPDATE users SET failed_logins = $1 WHERE id = $2`, [newFailCount, user.id]);
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
