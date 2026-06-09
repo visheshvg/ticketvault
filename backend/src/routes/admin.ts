@@ -2,7 +2,6 @@ import { Router, Request, Response } from 'express';
 import { authenticate, requireAdmin } from '../middleware/auth';
 import { query } from '../db';
 import { redis, KEYS } from '../redis/client';
-import { getAllEventSnapshots } from '../db/readModel/eventAnalytics';
 
 const router = Router();
 router.use(authenticate, requireAdmin);
@@ -23,12 +22,30 @@ router.get('/dashboard', async (_req: Request, res: Response) => {
     `SELECT COALESCE(SUM(amount_paid), 0) AS total FROM bookings WHERE status = 'confirmed'`
   );
 
-  const snapshots = await getAllEventSnapshots();
+  const events = await query<{
+    event_id: string; event_name: string; venue: string; total_seats: number;
+    booked_count: string; reserved_count: string; available_count: string; confirmed_revenue: string;
+  }>(
+    `SELECT
+       e.id   AS event_id,
+       e.name AS event_name,
+       e.venue,
+       e.total_seats,
+       COUNT(*) FILTER (WHERE s.status = 'booked')     AS booked_count,
+       COUNT(*) FILTER (WHERE s.status = 'reserved')   AS reserved_count,
+       COUNT(*) FILTER (WHERE s.status = 'available')  AS available_count,
+       COALESCE(SUM(b.amount_paid) FILTER (WHERE b.status = 'confirmed'), 0) AS confirmed_revenue
+     FROM events e
+     LEFT JOIN seats s    ON s.event_id = e.id
+     LEFT JOIN bookings b ON b.event_id = e.id
+     GROUP BY e.id, e.name, e.venue, e.total_seats
+     ORDER BY e.starts_at DESC`
+  );
 
   res.json({
     bookings: bookingStats,
     revenue: parseFloat(revenueRow.total),
-    events: snapshots,
+    events,
   });
 });
 
@@ -39,18 +56,6 @@ router.get('/audit/:bookingId', async (req: Request, res: Response) => {
     [req.params.bookingId]
   );
   res.json({ logs });
-});
-
-// ─── Saga compensations ───────────────────────────────────────────────────────
-router.get('/compensations', async (_req: Request, res: Response) => {
-  const compensations = await query(
-    `SELECT sc.*, b.user_id, b.event_id
-     FROM saga_compensations sc
-     JOIN bookings b ON sc.booking_id = b.id
-     ORDER BY sc.compensated_at DESC
-     LIMIT 50`
-  );
-  res.json({ compensations });
 });
 
 // ─── Waiting queue status ─────────────────────────────────────────────────────

@@ -14,7 +14,6 @@ import { register } from './utils/metrics';
 import { logger } from './utils/logger';
 import { expiryWorker } from './workers/expiryWorker';
 import { initWebSocketServer } from './services/websocket/wsService';
-import { refreshAllEventSnapshots } from './db/readModel/eventAnalytics';
 import authRoutes from './routes/auth';
 import eventRoutes from './routes/events';
 import bookingRoutes from './routes/bookings';
@@ -53,9 +52,6 @@ async function start() {
   initWebSocketServer(httpServer);
 
   expiryWorker.start();
-
-  // Warm the read model on startup
-  await refreshAllEventSnapshots().catch(() => {});
 
   httpServer.listen(config.port, () => {
     logger.info('TicketVault backend running', { port: config.port, env: config.env });

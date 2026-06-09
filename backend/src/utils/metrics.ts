@@ -49,14 +49,6 @@ export const queueDepth = new client.Gauge({
   registers: [register],
 });
 
-// ─── Saga & compensation ──────────────────────────────────────────────────────
-export const sagaCompensations = new client.Counter({
-  name: 'saga_compensations_total',
-  help: 'Total saga compensating transactions triggered',
-  labelNames: ['reason'],
-  registers: [register],
-});
-
 // ─── Payment ──────────────────────────────────────────────────────────────────
 export const paymentSuccessTotal = new client.Counter({
   name: 'payment_success_total',

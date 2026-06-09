@@ -3,7 +3,7 @@ import { config } from '../../config';
 import { withTransaction, query } from '../../db';
 import { redis, KEYS } from '../../redis/client';
 import { bookingService } from '../booking/bookingService';
-import { sagaCompensations, paymentSuccessTotal, paymentFailureTotal } from '../../utils/metrics';
+import { paymentSuccessTotal, paymentFailureTotal } from '../../utils/metrics';
 import { paymentLogger } from '../../utils/logger';
 
 const stripe = new Stripe(config.stripe.secretKey, { apiVersion: '2023-10-16' });
@@ -67,59 +67,45 @@ export class PaymentService {
 
   private async _handlePaymentFailure(intent: Stripe.PaymentIntent): Promise<void> {
     const { bookingId, userId } = intent.metadata;
-    paymentLogger.warn('Payment failed — triggering saga compensation', { booking_id: bookingId });
+    paymentLogger.warn('Payment failed — releasing seat', { booking_id: bookingId });
     paymentFailureTotal.inc();
-    await this._compensateSaga(bookingId, userId, 'payment_failed');
-    sagaCompensations.inc({ reason: 'payment_failed' });
-  }
 
-  private async _compensateSaga(bookingId: string, userId: string, reason: string): Promise<void> {
-    const stepsCompleted = ['booking_created', 'payment_attempted'];
-    const stepsCompensated: string[] = [];
     let eventId: string | null = null;
+    let seatId: string | null = null;
 
     try {
       await withTransaction(async (client) => {
-        await client.query(`UPDATE bookings SET status = 'compensated' WHERE id = $1`, [bookingId]);
-        stepsCompensated.push('booking_cancelled');
-
-        const seatResult = await client.query<{ event_id: string }>(
-          `UPDATE seats SET status = 'available', reserved_until = NULL
-           WHERE id = (SELECT seat_id FROM bookings WHERE id = $1)
-           RETURNING event_id`,
+        const result = await client.query<{ seat_id: string; event_id: string }>(
+          `UPDATE bookings SET status = 'compensated'
+            WHERE id = $1 AND status = 'pending'
+            RETURNING seat_id, event_id`,
           [bookingId]
         );
-        stepsCompensated.push('seat_released');
-        eventId = seatResult.rows[0]?.event_id ?? null;
+        if (!result.rows.length) return;
+
+        seatId = result.rows[0].seat_id;
+        eventId = result.rows[0].event_id;
+
+        await client.query(
+          `UPDATE seats SET status = 'available', reserved_until = NULL WHERE id = $1`,
+          [seatId]
+        );
 
         await client.query(
           `INSERT INTO booking_audit_log (booking_id, old_status, new_status, reason)
-           VALUES ($1, 'pending', 'compensated', $2)`,
-          [bookingId, reason]
-        );
-
-        await client.query(
-          `INSERT INTO saga_compensations (booking_id, reason, steps_completed, steps_compensated)
-           VALUES ($1, $2, $3, $4)`,
-          [bookingId, reason, JSON.stringify(stepsCompleted), JSON.stringify(stepsCompensated)]
+           VALUES ($1, 'pending', 'compensated', 'payment_failed')`,
+          [bookingId]
         );
       });
 
-      if (eventId) {
-        const seatRows = await query<{ seat_id: string }>(
-          `SELECT seat_id FROM bookings WHERE id = $1`,
-          [bookingId]
-        );
-        if (seatRows.length) {
-          await bookingService.offerSeatToNextWaiter(eventId, seatRows[0].seat_id);
-        }
+      if (eventId && seatId) {
+        await bookingService.offerSeatToNextWaiter(eventId, seatId);
       }
 
       await redis.del(KEYS.reservation(bookingId));
-
-      paymentLogger.info('Saga compensated', { booking_id: bookingId, user_id: userId, steps: stepsCompensated });
+      paymentLogger.info('Payment compensated', { booking_id: bookingId, user_id: userId });
     } catch (err) {
-      paymentLogger.error('Saga compensation FAILED', { booking_id: bookingId, error: (err as Error).message });
+      paymentLogger.error('Payment compensation failed', { booking_id: bookingId, error: (err as Error).message });
       throw err;
     }
   }

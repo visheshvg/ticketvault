@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
 import { query, pool } from '../../db';
 
 const REFRESH_TOKEN_TTL_DAYS = 30;
@@ -14,9 +13,9 @@ export async function issueRefreshToken(userId: string): Promise<string> {
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 3600 * 1000);
 
   await pool.query(
-    `INSERT INTO refresh_tokens (user_id, token_hash, family, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [userId, tokenHash, uuidv4(), expiresAt]
+    `INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+     VALUES ($1, $2, $3)`,
+    [userId, tokenHash, expiresAt]
   );
 
   return token;
