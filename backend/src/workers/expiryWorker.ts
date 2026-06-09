@@ -1,10 +1,9 @@
 import { withTransaction, query } from '../db';
 import { redis, KEYS } from '../redis/client';
-import { releaseAndNotify } from '../redis/scripts';
 import { config } from '../config';
 import { workerLogger } from '../utils/logger';
-import { notificationQueue } from './queues';
 import { kafkaProducer } from '../kafka/producer';
+import { bookingService } from '../services/booking/bookingService';
 
 export class ExpiryWorker {
   private intervalId: ReturnType<typeof setInterval> | null = null;
@@ -67,20 +66,7 @@ export class ExpiryWorker {
         );
       });
 
-      // Redis updates after successful PG commit
-      const released = await releaseAndNotify(
-        KEYS.seatInventory(booking.event_id),
-        KEYS.waitingQueue(booking.event_id)
-      );
-
-      if (released) {
-        const waiter = JSON.parse(released);
-        await notificationQueue.add('seat-available', {
-          type: 'SEAT_AVAILABLE',
-          userId: waiter.userId,
-          eventId: booking.event_id,
-        });
-      }
+      await bookingService.offerSeatToNextWaiter(booking.event_id, booking.seat_id);
 
       await redis.del(KEYS.reservation(booking.id));
 

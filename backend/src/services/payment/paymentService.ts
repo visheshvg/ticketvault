@@ -2,7 +2,6 @@ import Stripe from 'stripe';
 import { config } from '../../config';
 import { withTransaction, query } from '../../db';
 import { redis, KEYS } from '../../redis/client';
-import { releaseAndNotify } from '../../redis/scripts';
 import { bookingService } from '../booking/bookingService';
 import { sagaCompensations, paymentSuccessTotal, paymentFailureTotal } from '../../utils/metrics';
 import { paymentLogger } from '../../utils/logger';
@@ -125,10 +124,12 @@ export class PaymentService {
       });
 
       if (eventId) {
-        const released = await releaseAndNotify(KEYS.seatInventory(eventId), KEYS.waitingQueue(eventId));
-        if (released) {
-          const waiter = JSON.parse(released);
-          await notificationQueue.add('seat-available', { type: 'SEAT_AVAILABLE', userId: waiter.userId, eventId });
+        const seatRows = await query<{ seat_id: string }>(
+          `SELECT seat_id FROM bookings WHERE id = $1`,
+          [bookingId]
+        );
+        if (seatRows.length) {
+          await bookingService.offerSeatToNextWaiter(eventId, seatRows[0].seat_id);
         }
         refreshEventSnapshot(eventId).catch(() => {});
       }

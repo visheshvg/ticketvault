@@ -94,6 +94,19 @@ export class BookingService {
       t3();
     }
 
+    await redis.setex(
+      KEYS.reservation(response.booking_id),
+      config.reservation.ttlSeconds,
+      JSON.stringify({ userId, seatId: data.seat_id, eventId: data.event_id })
+    );
+    await notificationQueue.add('booking-reserved', {
+      type: 'RESERVATION_CREATED',
+      userId,
+      bookingId: response.booking_id,
+      seatNumber: response.seat.seat_number,
+      expiresAt: response.expires_at?.toISOString(),
+    });
+
     await redis.setex(idemKey, config.reservation.idempotencyTtlSeconds, JSON.stringify(response));
 
     broadcastSeatUpdate({
@@ -170,20 +183,6 @@ export class BookingService {
       amount,
       expires_at: expiresAt.toISOString(),
       timestamp: new Date().toISOString(),
-    });
-
-    await redis.setex(
-      KEYS.reservation(bookingId),
-      config.reservation.ttlSeconds,
-      JSON.stringify({ userId, seatId: seat.id, eventId: data.event_id })
-    );
-
-    await notificationQueue.add('booking-reserved', {
-      type: 'RESERVATION_CREATED',
-      userId,
-      bookingId,
-      seatNumber: seat.seat_number,
-      expiresAt: expiresAt.toISOString(),
     });
 
     bookingLogger.info('Booking created', { booking_id: bookingId, user_id: userId, seat_id: seat.id, amount });
@@ -323,6 +322,18 @@ export class BookingService {
     refreshEventSnapshot(eventId).catch(() => {});
   }
 
+  async offerSeatToNextWaiter(eventId: string, seatId: string): Promise<void> {
+    const seatRows = await query<{ seat_number: string; section: string }>(
+      `SELECT seat_number, section FROM seats WHERE id = $1`,
+      [seatId]
+    );
+    if (!seatRows.length) {
+      await redis.incr(KEYS.seatInventory(eventId));
+      return;
+    }
+    await this._offerSeatToNextWaiter(eventId, seatId, seatRows[0].seat_number, seatRows[0].section);
+  }
+
   async _offerSeatToNextWaiter(eventId: string, seatId: string, seatNumber: string, section: string): Promise<void> {
     const released = await releaseAndNotify(KEYS.seatInventory(eventId), KEYS.waitingQueue(eventId));
 
@@ -344,6 +355,11 @@ export class BookingService {
         return this._createBookingInTransaction(client, waiter.userId, { event_id: eventId, seat_id: seatId }, idempotencyKey, amount);
       });
 
+      await redis.setex(
+        KEYS.reservation(response.booking_id),
+        config.reservation.ttlSeconds,
+        JSON.stringify({ userId: waiter.userId, seatId, eventId })
+      );
       await notificationQueue.add('waitlist-reserved', {
         type: 'RESERVATION_CREATED',
         userId: waiter.userId,

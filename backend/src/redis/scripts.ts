@@ -13,8 +13,11 @@ return redis.call('DECR', KEYS[1])
 `;
 
 const RELEASE_AND_NOTIFY = `
-redis.call('INCR', KEYS[1])
 local next_user = redis.call('RPOP', KEYS[2])
+if next_user == false then
+  redis.call('INCR', KEYS[1])
+  return nil
+end
 return next_user
 `;
 
