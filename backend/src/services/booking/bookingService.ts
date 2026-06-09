@@ -10,7 +10,6 @@ import {
   bookingTotal, bookingDuration, queueDepth, redisLuaConflicts, idempotencyHits,
 } from '../../utils/metrics';
 import { eventService } from '../event/eventService';
-import { notificationQueue } from '../../workers/queues';
 import { broadcastSeatUpdate, broadcastInventoryUpdate } from '../websocket/wsService';
 
 const IDEMPOTENCY_PROCESSING_TTL = 30;
@@ -97,13 +96,6 @@ export class BookingService {
       config.reservation.ttlSeconds,
       JSON.stringify({ userId, seatId: data.seat_id, eventId: data.event_id })
     );
-    await notificationQueue.add('booking-reserved', {
-      type: 'RESERVATION_CREATED',
-      userId,
-      bookingId: response.booking_id,
-      seatNumber: response.seat.seat_number,
-      expiresAt: response.expires_at?.toISOString(),
-    });
 
     await redis.setex(idemKey, config.reservation.idempotencyTtlSeconds, JSON.stringify(response));
 
@@ -324,14 +316,6 @@ export class BookingService {
         config.reservation.ttlSeconds,
         JSON.stringify({ userId: waiter.userId, seatId, eventId })
       );
-      await notificationQueue.add('waitlist-reserved', {
-        type: 'RESERVATION_CREATED',
-        userId: waiter.userId,
-        bookingId: response.booking_id,
-        seatNumber,
-        expiresAt: response.expires_at?.toISOString(),
-        fromWaitlist: true,
-      });
 
       broadcastSeatUpdate({ event_id: eventId, seat_id: seatId, status: 'reserved', seat_number: seatNumber, section });
     } catch (err) {

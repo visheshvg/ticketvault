@@ -4,8 +4,7 @@ import { logger } from '../utils/logger';
 // Design invariants baked into this schema:
 // 1. available_seats is NOT stored — always derived from seats.status or Redis.
 // 2. Every state transition produces an immutable row in booking_audit_log.
-// 3. Reconciliation worker writes mismatches to reconciliation_issues for ops visibility.
-// 4. Refresh tokens are rotated on every use — theft detection via family invalidation.
+// 3. Refresh tokens are rotated on every use — theft detection via family invalidation.
 
 const migrations = `
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -97,34 +96,6 @@ CREATE TABLE IF NOT EXISTS saga_compensations (
   compensated_at      TIMESTAMPTZ DEFAULT now()
 );
 
--- ─── Dead-letter queue ────────────────────────────────────────────────────────
--- Jobs that exhausted all retries land here for ops inspection and manual replay.
-
-CREATE TABLE IF NOT EXISTS dead_letter_events (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  source       TEXT NOT NULL,
-  event_type   TEXT NOT NULL,
-  payload      JSONB NOT NULL,
-  error        TEXT,
-  attempts     INT DEFAULT 0,
-  created_at   TIMESTAMPTZ DEFAULT now(),
-  last_failed  TIMESTAMPTZ DEFAULT now()
-);
-
--- ─── Reconciliation issues ────────────────────────────────────────────────────
--- Written by the reconciliation worker when it detects drift between
--- booking status, seat status, Redis inventory, and payment state.
-
-CREATE TABLE IF NOT EXISTS reconciliation_issues (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  issue_type   TEXT NOT NULL,
-  entity_id    UUID,
-  description  TEXT NOT NULL,
-  resolved     BOOLEAN DEFAULT false,
-  detected_at  TIMESTAMPTZ DEFAULT now(),
-  resolved_at  TIMESTAMPTZ
-);
-
 -- ─── CQRS read model ─────────────────────────────────────────────────────────
 -- Materialised view kept in sync by the read-model updater.
 -- Heavy analytics reads hit this table, not the write-side bookings table.
@@ -161,8 +132,6 @@ CREATE INDEX IF NOT EXISTS idx_seats_event         ON seats(event_id);
 CREATE INDEX IF NOT EXISTS idx_seats_event_status  ON seats(event_id, status);
 CREATE INDEX IF NOT EXISTS idx_audit_booking       ON booking_audit_log(booking_id);
 CREATE INDEX IF NOT EXISTS idx_audit_changed       ON booking_audit_log(changed_at);
-CREATE INDEX IF NOT EXISTS idx_dlq_source          ON dead_letter_events(source, created_at);
-CREATE INDEX IF NOT EXISTS idx_recon_unresolved    ON reconciliation_issues(detected_at) WHERE resolved = false;
 CREATE INDEX IF NOT EXISTS idx_refresh_user        ON refresh_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_refresh_family      ON refresh_tokens(family);
 CREATE INDEX IF NOT EXISTS idx_attempts_user_event ON booking_attempts(user_id, event_id, attempted_at);

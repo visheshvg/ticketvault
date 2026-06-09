@@ -5,7 +5,6 @@ import { redis, KEYS } from '../../redis/client';
 import { bookingService } from '../booking/bookingService';
 import { sagaCompensations, paymentSuccessTotal, paymentFailureTotal } from '../../utils/metrics';
 import { paymentLogger } from '../../utils/logger';
-import { notificationQueue } from '../../workers/queues';
 
 const stripe = new Stripe(config.stripe.secretKey, { apiVersion: '2023-10-16' });
 
@@ -63,14 +62,7 @@ export class PaymentService {
     await bookingService.confirmBooking(bookingId, intent.id);
     paymentSuccessTotal.inc();
 
-    await notificationQueue.add('payment-success', {
-      type: 'PAYMENT_CONFIRMED',
-      userId,
-      bookingId,
-      amount: intent.amount / 100,
-    });
-
-    paymentLogger.info('Payment confirmed', { booking_id: bookingId });
+    paymentLogger.info('Payment confirmed', { booking_id: bookingId, user_id: userId });
   }
 
   private async _handlePaymentFailure(intent: Stripe.PaymentIntent): Promise<void> {
@@ -125,14 +117,7 @@ export class PaymentService {
 
       await redis.del(KEYS.reservation(bookingId));
 
-      await notificationQueue.add('compensation-notify', {
-        type: 'BOOKING_COMPENSATED',
-        userId,
-        bookingId,
-        reason,
-      });
-
-      paymentLogger.info('Saga compensated', { booking_id: bookingId, steps: stepsCompensated });
+      paymentLogger.info('Saga compensated', { booking_id: bookingId, user_id: userId, steps: stepsCompensated });
     } catch (err) {
       paymentLogger.error('Saga compensation FAILED', { booking_id: bookingId, error: (err as Error).message });
       throw err;

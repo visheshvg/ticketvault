@@ -13,8 +13,6 @@ import { requestLogger, errorHandler } from './middleware/requestLogger';
 import { register } from './utils/metrics';
 import { logger } from './utils/logger';
 import { expiryWorker } from './workers/expiryWorker';
-import { reconciliationWorker } from './workers/reconciliation/reconciliationWorker';
-import { startNotificationWorker } from './workers/queues';
 import { initWebSocketServer } from './services/websocket/wsService';
 import { refreshAllEventSnapshots } from './db/readModel/eventAnalytics';
 import authRoutes from './routes/auth';
@@ -51,14 +49,10 @@ app.use('/api/admin', adminRoutes);
 
 app.use(errorHandler);
 
-let notificationWorker: ReturnType<typeof startNotificationWorker> | null = null;
-
 async function start() {
   initWebSocketServer(httpServer);
 
   expiryWorker.start();
-  reconciliationWorker.start();
-  notificationWorker = startNotificationWorker();
 
   // Warm the read model on startup
   await refreshAllEventSnapshots().catch(() => {});
@@ -72,9 +66,6 @@ async function shutdown(signal: string) {
   logger.info(`${signal} received — shutting down gracefully`);
 
   expiryWorker.stop();
-  reconciliationWorker.stop();
-
-  if (notificationWorker) await notificationWorker.close();
 
   await shutdownTracing();
 
