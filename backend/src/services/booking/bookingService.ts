@@ -12,8 +12,6 @@ import {
 import { eventService } from '../event/eventService';
 import { notificationQueue } from '../../workers/queues';
 import { broadcastSeatUpdate, broadcastInventoryUpdate } from '../websocket/wsService';
-import { writeToOutbox } from '../../workers/outbox/outboxProcessor';
-import { refreshEventSnapshot } from '../../db/readModel/eventAnalytics';
 
 const IDEMPOTENCY_PROCESSING_TTL = 30;
 
@@ -118,9 +116,6 @@ export class BookingService {
     });
     broadcastInventoryUpdate(data.event_id, remaining, amount);
 
-    // Refresh read model asynchronously — don't block the response
-    refreshEventSnapshot(data.event_id).catch(() => {});
-
     bookingTotal.inc({ status: 'pending' });
     timer();
     return response;
@@ -173,17 +168,6 @@ export class BookingService {
        VALUES ($1, NULL, 'pending', 'booking_created', $2)`,
       [bookingId, JSON.stringify({ seat_id: seat.id, amount })]
     );
-
-    // Write event to outbox inside the same transaction — guaranteed delivery to Kafka
-    await writeToOutbox(client, bookingId, 'BOOKING_CREATED', {
-      booking_id: bookingId,
-      user_id: userId,
-      event_id: data.event_id,
-      seat_id: seat.id,
-      amount,
-      expires_at: expiresAt.toISOString(),
-      timestamp: new Date().toISOString(),
-    });
 
     bookingLogger.info('Booking created', { booking_id: bookingId, user_id: userId, seat_id: seat.id, amount });
 
@@ -244,19 +228,10 @@ export class BookingService {
          VALUES ($1, $2, 'cancelled', 'user_cancelled')`,
         [bookingId, oldStatus]
       );
-
-      await writeToOutbox(client, bookingId, 'BOOKING_CANCELLED', {
-        booking_id: bookingId,
-        user_id: userId,
-        event_id: eventId,
-        seat_id: seatId,
-        timestamp: new Date().toISOString(),
-      });
     });
 
     await this._offerSeatToNextWaiter(eventId, seatId, seatNumber, section);
     await redis.del(KEYS.reservation(bookingId));
-    refreshEventSnapshot(eventId).catch(() => {});
   }
 
   async confirmBooking(bookingId: string, stripePaymentIntentId: string): Promise<void> {
@@ -300,16 +275,6 @@ export class BookingService {
          VALUES ($1, 'pending', 'confirmed', 'payment_success')`,
         [bookingId]
       );
-
-      await writeToOutbox(client, bookingId, 'BOOKING_CONFIRMED', {
-        booking_id: bookingId,
-        user_id: result.rows[0].user_id,
-        event_id: eventId,
-        seat_id: seatId,
-        amount: result.rows[0].amount_paid,
-        stripe_payment_intent_id: stripePaymentIntentId,
-        timestamp: new Date().toISOString(),
-      });
     });
 
     if (alreadyConfirmed) {
@@ -319,7 +284,6 @@ export class BookingService {
 
     await redis.del(KEYS.reservation(bookingId));
     broadcastSeatUpdate({ event_id: eventId, seat_id: seatId, status: 'booked', seat_number: seatNumber, section });
-    refreshEventSnapshot(eventId).catch(() => {});
   }
 
   async offerSeatToNextWaiter(eventId: string, seatId: string): Promise<void> {

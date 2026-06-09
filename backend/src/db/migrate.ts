@@ -4,9 +4,8 @@ import { logger } from '../utils/logger';
 // Design invariants baked into this schema:
 // 1. available_seats is NOT stored — always derived from seats.status or Redis.
 // 2. Every state transition produces an immutable row in booking_audit_log.
-// 3. All outbound events are written to outbox first, then published — no lost events.
-// 4. Reconciliation worker writes mismatches to reconciliation_issues for ops visibility.
-// 5. Refresh tokens are rotated on every use — theft detection via family invalidation.
+// 3. Reconciliation worker writes mismatches to reconciliation_issues for ops visibility.
+// 4. Refresh tokens are rotated on every use — theft detection via family invalidation.
 
 const migrations = `
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -98,21 +97,6 @@ CREATE TABLE IF NOT EXISTS saga_compensations (
   compensated_at      TIMESTAMPTZ DEFAULT now()
 );
 
--- ─── Transactional outbox ─────────────────────────────────────────────────────
--- Events are written here inside the same DB transaction as the state change.
--- The outbox processor reads pending rows and publishes to Kafka, then marks published.
--- This guarantees at-least-once delivery with no lost events.
-
-CREATE TABLE IF NOT EXISTS outbox_events (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  aggregate_id UUID NOT NULL,
-  event_type   TEXT NOT NULL,
-  payload      JSONB NOT NULL,
-  published    BOOLEAN DEFAULT false,
-  published_at TIMESTAMPTZ,
-  created_at   TIMESTAMPTZ DEFAULT now()
-);
-
 -- ─── Dead-letter queue ────────────────────────────────────────────────────────
 -- Jobs that exhausted all retries land here for ops inspection and manual replay.
 
@@ -177,7 +161,6 @@ CREATE INDEX IF NOT EXISTS idx_seats_event         ON seats(event_id);
 CREATE INDEX IF NOT EXISTS idx_seats_event_status  ON seats(event_id, status);
 CREATE INDEX IF NOT EXISTS idx_audit_booking       ON booking_audit_log(booking_id);
 CREATE INDEX IF NOT EXISTS idx_audit_changed       ON booking_audit_log(changed_at);
-CREATE INDEX IF NOT EXISTS idx_outbox_unpublished  ON outbox_events(created_at) WHERE published = false;
 CREATE INDEX IF NOT EXISTS idx_dlq_source          ON dead_letter_events(source, created_at);
 CREATE INDEX IF NOT EXISTS idx_recon_unresolved    ON reconciliation_issues(detected_at) WHERE resolved = false;
 CREATE INDEX IF NOT EXISTS idx_refresh_user        ON refresh_tokens(user_id);

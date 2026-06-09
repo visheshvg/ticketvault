@@ -6,8 +6,6 @@ import { bookingService } from '../booking/bookingService';
 import { sagaCompensations, paymentSuccessTotal, paymentFailureTotal } from '../../utils/metrics';
 import { paymentLogger } from '../../utils/logger';
 import { notificationQueue } from '../../workers/queues';
-import { writeToOutbox } from '../../workers/outbox/outboxProcessor';
-import { refreshEventSnapshot } from '../../db/readModel/eventAnalytics';
 
 const stripe = new Stripe(config.stripe.secretKey, { apiVersion: '2023-10-16' });
 
@@ -113,14 +111,6 @@ export class PaymentService {
            VALUES ($1, $2, $3, $4)`,
           [bookingId, reason, JSON.stringify(stepsCompleted), JSON.stringify(stepsCompensated)]
         );
-
-        await writeToOutbox(client, bookingId, 'BOOKING_COMPENSATED', {
-          booking_id: bookingId,
-          user_id: userId,
-          event_id: eventId,
-          reason,
-          timestamp: new Date().toISOString(),
-        });
       });
 
       if (eventId) {
@@ -131,7 +121,6 @@ export class PaymentService {
         if (seatRows.length) {
           await bookingService.offerSeatToNextWaiter(eventId, seatRows[0].seat_id);
         }
-        refreshEventSnapshot(eventId).catch(() => {});
       }
 
       await redis.del(KEYS.reservation(bookingId));

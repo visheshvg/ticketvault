@@ -12,9 +12,7 @@ import { globalRateLimit } from './middleware/rateLimiter';
 import { requestLogger, errorHandler } from './middleware/requestLogger';
 import { register } from './utils/metrics';
 import { logger } from './utils/logger';
-import { kafkaProducer } from './kafka/producer';
 import { expiryWorker } from './workers/expiryWorker';
-import { outboxProcessor } from './workers/outbox/outboxProcessor';
 import { reconciliationWorker } from './workers/reconciliation/reconciliationWorker';
 import { startNotificationWorker } from './workers/queues';
 import { initWebSocketServer } from './services/websocket/wsService';
@@ -57,9 +55,7 @@ let notificationWorker: ReturnType<typeof startNotificationWorker> | null = null
 
 async function start() {
   initWebSocketServer(httpServer);
-  await kafkaProducer.connect();
 
-  outboxProcessor.start();
   expiryWorker.start();
   reconciliationWorker.start();
   notificationWorker = startNotificationWorker();
@@ -75,13 +71,11 @@ async function start() {
 async function shutdown(signal: string) {
   logger.info(`${signal} received — shutting down gracefully`);
 
-  outboxProcessor.stop();
   expiryWorker.stop();
   reconciliationWorker.stop();
 
   if (notificationWorker) await notificationWorker.close();
 
-  await kafkaProducer.disconnect();
   await shutdownTracing();
 
   httpServer.close(() => {

@@ -2,7 +2,6 @@ import { withTransaction, query } from '../db';
 import { redis, KEYS } from '../redis/client';
 import { config } from '../config';
 import { workerLogger } from '../utils/logger';
-import { kafkaProducer } from '../kafka/producer';
 import { bookingService } from '../services/booking/bookingService';
 
 export class ExpiryWorker {
@@ -69,13 +68,6 @@ export class ExpiryWorker {
       await bookingService.offerSeatToNextWaiter(booking.event_id, booking.seat_id);
 
       await redis.del(KEYS.reservation(booking.id));
-
-      await kafkaProducer.publish('booking-events', {
-        type: 'BOOKING_EXPIRED',
-        booking_id: booking.id,
-        event_id: booking.event_id,
-        timestamp: new Date().toISOString(),
-      });
 
       workerLogger.info('Booking expired, seat released', { booking_id: booking.id });
     } catch (err) {
