@@ -22,20 +22,9 @@ export const config = {
     password: process.env.REDIS_PASSWORD || undefined,
   },
 
-  kafka: {
-    brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
-    clientId: 'ticketvault',
-    groupId: 'ticketvault-consumers',
-  },
-
   jwt: {
     secret: process.env.JWT_SECRET || 'change-me-in-production',
     expiresIn: '24h',
-  },
-
-  stripe: {
-    secretKey: process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder',
-    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || 'whsec_placeholder',
   },
 
   reservation: {

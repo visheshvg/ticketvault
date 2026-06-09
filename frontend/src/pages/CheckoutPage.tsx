@@ -7,7 +7,7 @@ import { paymentsApi } from '../services/api';
 import { LoadingSpinner } from '../components/common/LoadingSpinner';
 import { CountdownTimer } from '../components/common/CountdownTimer';
 import { toast } from '../components/common/Toast';
-import { CheckCircle, CreditCard, AlertCircle, Info, Lock } from 'lucide-react';
+import { CheckCircle, CreditCard, AlertCircle, Info, XCircle } from 'lucide-react';
 
 type PaymentState = 'idle' | 'processing' | 'success' | 'failed';
 
@@ -18,22 +18,22 @@ export function CheckoutPage() {
   const { expired } = useCountdown(reservationExpiresAt);
 
   const [paymentState, setPaymentState] = useState<PaymentState>('idle');
-  const [clientSecret, setClientSecret] = useState<string | null>(null);
   const [amount, setAmount] = useState<number | null>(null);
-  const [loadingIntent, setLoadingIntent] = useState(true);
+  const [paymentId, setPaymentId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!bookingId) return;
-    paymentsApi.createIntent(bookingId)
+    paymentsApi.initiate(bookingId)
       .then(data => {
-        setClientSecret(data.clientSecret);
         setAmount(data.amount);
+        setPaymentId(data.paymentId);
       })
       .catch(() => {
         toast.error('Could not load payment details');
         setPaymentState('failed');
       })
-      .finally(() => setLoadingIntent(false));
+      .finally(() => setLoading(false));
   }, [bookingId]);
 
   const handleExpiry = useCallback(() => {
@@ -46,18 +46,22 @@ export function CheckoutPage() {
     if (expired) handleExpiry();
   }, [expired, handleExpiry]);
 
-  const handleDemoPayment = async () => {
-    if (!bookingId || !clientSecret) return;
+  const submit = async (success: boolean) => {
+    if (!bookingId) return;
     setPaymentState('processing');
     try {
-      // In production: stripe.confirmPayment({ elements, confirmParams })
-      // The webhook handler at POST /api/payments/webhook confirms the booking.
-      await new Promise(r => setTimeout(r, 1800));
-      setPaymentState('success');
-      clearActiveBooking();
+      await paymentsApi.simulate(bookingId, success);
+      if (success) {
+        setPaymentState('success');
+        clearActiveBooking();
+      } else {
+        setPaymentState('failed');
+        toast.error('Payment failed', { description: 'Your seat has been released.' });
+        setTimeout(() => navigate('/'), 2000);
+      }
     } catch {
       setPaymentState('failed');
-      toast.error('Payment failed', { description: 'Your seat is still reserved. Try again.' });
+      toast.error('Something went wrong');
     }
   };
 
@@ -79,7 +83,7 @@ export function CheckoutPage() {
         >
           <h2 className="success-title">Booking Confirmed!</h2>
           <p className="success-sub" style={{ marginBottom: 24 }}>
-            Your ticket is secured. A confirmation has been sent to your email.
+            Your ticket is secured. A confirmation will be sent to your email.
           </p>
           <button className="btn btn-primary" onClick={() => navigate('/bookings')}>
             View My Tickets
@@ -105,7 +109,7 @@ export function CheckoutPage() {
           </div>
         )}
 
-        {loadingIntent ? (
+        {loading ? (
           <div className="checkout-loading"><LoadingSpinner size="md" /></div>
         ) : (
           <>
@@ -114,6 +118,12 @@ export function CheckoutPage() {
                 <span className="label">Booking ID</span>
                 <code style={{ fontSize: '0.78rem' }}>{bookingId?.slice(0, 8)}…</code>
               </div>
+              {paymentId && (
+                <div className="checkout-row">
+                  <span className="label">Payment ID</span>
+                  <code style={{ fontSize: '0.78rem' }}>{paymentId.slice(0, 12)}…</code>
+                </div>
+              )}
               {amount !== null && (
                 <div className="checkout-row total">
                   <span className="label">Total due</span>
@@ -125,51 +135,38 @@ export function CheckoutPage() {
             <div className="alert alert-info" style={{ marginBottom: 16 }}>
               <Info size={14} className="alert-icon" style={{ flexShrink: 0, color: 'var(--accent-light)' }} />
               <span style={{ fontSize: '0.82rem', lineHeight: 1.5 }}>
-                <strong>Demo mode.</strong> In production, Stripe Elements renders here using the
-                PaymentIntent <code>clientSecret</code> returned from{' '}
-                <code>/api/payments/create-intent</code>.
+                <strong>Demo mode.</strong> Card collection via Stripe/Razorpay is out of scope
+                for the public demo. Use the buttons below to simulate either outcome — both
+                paths exercise the real reserve → confirm / release server flow.
               </span>
-            </div>
-
-            <div style={{
-              background: 'var(--bg-elevated)',
-              border: '1px dashed var(--border)',
-              borderRadius: 'var(--r-md)',
-              padding: '20px',
-              textAlign: 'center',
-              marginBottom: 16,
-              color: 'var(--text-muted)',
-              fontSize: '0.82rem',
-            }}>
-              <Lock size={16} style={{ marginBottom: 6, opacity: 0.4 }} />
-              <div>Stripe Elements card form</div>
-              <div style={{ fontSize: '0.74rem', marginTop: 4, opacity: 0.6 }}>
-                clientSecret: {clientSecret?.slice(0, 24)}…
-              </div>
             </div>
 
             {paymentState === 'failed' && (
               <div className="alert alert-error" style={{ marginBottom: 14 }}>
                 <AlertCircle size={14} className="alert-icon" />
-                Payment failed. Your seat is still reserved — please try again.
+                Payment failed — your seat has been released.
               </div>
             )}
 
-            <button
-              className="btn btn-primary btn-block btn-lg"
-              onClick={handleDemoPayment}
-              disabled={paymentState === 'processing' || expired || !clientSecret}
-            >
-              {paymentState === 'processing'
-                ? <><LoadingSpinner size="sm" /> Processing…</>
-                : <><CreditCard size={16} /> Simulate Payment{amount ? ` · $${amount.toFixed(2)}` : ''}</>
-              }
-            </button>
-
-            <p style={{ fontSize: '0.73rem', color: 'var(--text-muted)', textAlign: 'center', marginTop: 12 }}>
-              <Lock size={10} style={{ display: 'inline', marginRight: 3, verticalAlign: 'middle' }} />
-              Secured by Stripe. Your card details are never stored on our servers.
-            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button
+                className="btn btn-primary btn-block btn-lg"
+                onClick={() => submit(true)}
+                disabled={paymentState === 'processing' || expired}
+              >
+                {paymentState === 'processing'
+                  ? <><LoadingSpinner size="sm" /> Processing…</>
+                  : <><CreditCard size={16} /> Simulate successful payment{amount ? ` · $${amount.toFixed(2)}` : ''}</>
+                }
+              </button>
+              <button
+                className="btn btn-secondary btn-block"
+                onClick={() => submit(false)}
+                disabled={paymentState === 'processing' || expired}
+              >
+                <XCircle size={16} /> Simulate failure
+              </button>
+            </div>
           </>
         )}
       </motion.div>

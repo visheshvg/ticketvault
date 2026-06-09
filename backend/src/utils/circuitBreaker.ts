@@ -74,4 +74,3 @@ export class CircuitBreaker {
 }
 
 export const redisBreaker  = new CircuitBreaker('redis',  { failureThreshold: 3, timeoutMs: 30_000 });
-export const stripeBreaker = new CircuitBreaker('stripe', { failureThreshold: 5, timeoutMs: 60_000 });

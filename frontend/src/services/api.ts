@@ -51,8 +51,10 @@ export const bookingsApi = {
 };
 
 export const paymentsApi = {
-  createIntent: (bookingId: string) =>
-    api.post(`/payments/create-intent/${bookingId}`).then(r => r.data),
+  initiate: (bookingId: string) =>
+    api.post(`/payments/initiate/${bookingId}`).then(r => r.data),
+  simulate: (bookingId: string, success: boolean) =>
+    api.post(`/payments/simulate/${bookingId}`, { success }).then(r => r.data),
 };
 
 export const adminApi = {

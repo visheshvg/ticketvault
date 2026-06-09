@@ -1,16 +1,17 @@
-import Stripe from 'stripe';
-import { config } from '../../config';
+import { v4 as uuidv4 } from 'uuid';
 import { withTransaction, query } from '../../db';
 import { redis, KEYS } from '../../redis/client';
 import { bookingService } from '../booking/bookingService';
 import { paymentSuccessTotal, paymentFailureTotal } from '../../utils/metrics';
 import { paymentLogger } from '../../utils/logger';
 
-const stripe = new Stripe(config.stripe.secretKey, { apiVersion: '2023-10-16' });
+// Simulated payment service used for the public demo.
+// In a production build this would call Stripe / Razorpay / Adyen — same
+// internal effects, but triggered by webhooks instead of a direct API call.
 
 export class PaymentService {
 
-  async createPaymentIntent(bookingId: string, userId: string): Promise<{ clientSecret: string; amount: number }> {
+  async initiatePayment(bookingId: string, userId: string): Promise<{ paymentId: string; amount: number }> {
     const bookings = await query<{ amount_paid: number; status: string; user_id: string }>(
       `SELECT amount_paid, status, user_id FROM bookings WHERE id = $1`,
       [bookingId]
@@ -20,55 +21,35 @@ export class PaymentService {
     if (booking.user_id !== userId) throw new Error('Forbidden');
     if (booking.status !== 'pending') throw new Error(`Booking status is ${booking.status}`);
 
-    const intent = await stripe.paymentIntents.create({
-      amount: Math.round(booking.amount_paid * 100),
-      currency: 'usd',
-      metadata: { bookingId, userId },
-      automatic_payment_methods: { enabled: true },
-    });
-
-    // Store intent ID immediately so reconciliation worker can detect stuck pending bookings
+    const paymentId = `sim_${uuidv4()}`;
     await query(
       `UPDATE bookings SET stripe_payment_intent_id = $1 WHERE id = $2`,
-      [intent.id, bookingId]
+      [paymentId, bookingId]
     );
 
-    paymentLogger.info('Payment intent created', { booking_id: bookingId, amount: booking.amount_paid });
-    return { clientSecret: intent.client_secret!, amount: booking.amount_paid };
+    paymentLogger.info('Payment initiated', { booking_id: bookingId, payment_id: paymentId });
+    return { paymentId, amount: booking.amount_paid };
   }
 
-  async handleWebhook(rawBody: Buffer, signature: string): Promise<void> {
-    let event: Stripe.Event;
-    try {
-      event = stripe.webhooks.constructEvent(rawBody, signature, config.stripe.webhookSecret);
-    } catch {
-      throw new Error('Webhook signature verification failed');
+  async simulatePayment(bookingId: string, userId: string, success: boolean): Promise<void> {
+    const bookings = await query<{ stripe_payment_intent_id: string | null; user_id: string }>(
+      `SELECT stripe_payment_intent_id, user_id FROM bookings WHERE id = $1`,
+      [bookingId]
+    );
+    if (!bookings.length) throw new Error('Booking not found');
+    if (bookings[0].user_id !== userId) throw new Error('Forbidden');
+
+    const paymentId = bookings[0].stripe_payment_intent_id ?? `sim_${uuidv4()}`;
+
+    if (success) {
+      await bookingService.confirmBooking(bookingId, paymentId);
+      paymentSuccessTotal.inc();
+      paymentLogger.info('Payment confirmed (simulated)', { booking_id: bookingId, user_id: userId });
+      return;
     }
 
-    paymentLogger.info('Stripe webhook received', { type: event.type });
-
-    switch (event.type) {
-      case 'payment_intent.succeeded':
-        await this._handlePaymentSuccess(event.data.object as Stripe.PaymentIntent);
-        break;
-      case 'payment_intent.payment_failed':
-        await this._handlePaymentFailure(event.data.object as Stripe.PaymentIntent);
-        break;
-    }
-  }
-
-  private async _handlePaymentSuccess(intent: Stripe.PaymentIntent): Promise<void> {
-    const { bookingId, userId } = intent.metadata;
-    await bookingService.confirmBooking(bookingId, intent.id);
-    paymentSuccessTotal.inc();
-
-    paymentLogger.info('Payment confirmed', { booking_id: bookingId, user_id: userId });
-  }
-
-  private async _handlePaymentFailure(intent: Stripe.PaymentIntent): Promise<void> {
-    const { bookingId, userId } = intent.metadata;
-    paymentLogger.warn('Payment failed — releasing seat', { booking_id: bookingId });
     paymentFailureTotal.inc();
+    paymentLogger.warn('Payment failed (simulated) — releasing seat', { booking_id: bookingId });
 
     let eventId: string | null = null;
     let seatId: string | null = null;
