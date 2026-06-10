@@ -2,7 +2,6 @@ import { Router, Request, Response } from 'express';
 import { bookingService } from '../services/booking/bookingService';
 import { authenticate } from '../middleware/auth';
 import { bookingRateLimit } from '../middleware/rateLimiter';
-import { abuseGuard } from '../middleware/security/abuseGuard';
 import { z } from 'zod';
 
 const router = Router();
@@ -14,7 +13,7 @@ const CreateBookingSchema = z.object({
 
 router.use(authenticate);
 
-router.post('/', bookingRateLimit, abuseGuard, async (req: Request, res: Response) => {
+router.post('/', bookingRateLimit, async (req: Request, res: Response) => {
   const parsed = CreateBookingSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 

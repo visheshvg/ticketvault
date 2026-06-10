@@ -1,7 +1,3 @@
-// Tracing must be first — patches Express, pg, ioredis before they are imported
-import { initTracing, shutdownTracing } from './utils/tracing';
-initTracing();
-
 import 'express-async-errors';
 import express from 'express';
 import http from 'http';
@@ -61,8 +57,6 @@ async function shutdown(signal: string) {
   logger.info(`${signal} received — shutting down gracefully`);
 
   expiryWorker.stop();
-
-  await shutdownTracing();
 
   httpServer.close(() => {
     logger.info('HTTP server closed');

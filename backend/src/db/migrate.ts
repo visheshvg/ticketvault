@@ -83,16 +83,6 @@ CREATE TABLE IF NOT EXISTS booking_audit_log (
   metadata   JSONB DEFAULT '{}'
 );
 
--- ─── Abuse prevention ────────────────────────────────────────────────────────
-
-CREATE TABLE IF NOT EXISTS booking_attempts (
-  id         BIGSERIAL PRIMARY KEY,
-  user_id    UUID,
-  event_id   UUID,
-  ip_address TEXT,
-  attempted_at TIMESTAMPTZ DEFAULT now()
-);
-
 -- ─── Indexes ─────────────────────────────────────────────────────────────────
 
 CREATE INDEX IF NOT EXISTS idx_bookings_user       ON bookings(user_id);
@@ -104,8 +94,6 @@ CREATE INDEX IF NOT EXISTS idx_seats_event_status  ON seats(event_id, status);
 CREATE INDEX IF NOT EXISTS idx_audit_booking       ON booking_audit_log(booking_id);
 CREATE INDEX IF NOT EXISTS idx_audit_changed       ON booking_audit_log(changed_at);
 CREATE INDEX IF NOT EXISTS idx_refresh_user        ON refresh_tokens(user_id);
-CREATE INDEX IF NOT EXISTS idx_attempts_user_event ON booking_attempts(user_id, event_id, attempted_at);
-CREATE INDEX IF NOT EXISTS idx_attempts_ip         ON booking_attempts(ip_address, attempted_at);
 `;
 
 async function migrate() {

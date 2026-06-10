@@ -12,14 +12,6 @@
     "seed": "tsx src/db/seed.ts"
   },
   "dependencies": {
-    "@opentelemetry/exporter-trace-otlp-http": "^0.45.1",
-    "@opentelemetry/instrumentation-express": "^0.36.0",
-    "@opentelemetry/instrumentation-http": "^0.45.1",
-    "@opentelemetry/instrumentation-ioredis": "^0.38.0",
-    "@opentelemetry/instrumentation-pg": "^0.39.0",
-    "@opentelemetry/resources": "^1.18.1",
-    "@opentelemetry/sdk-node": "^0.45.1",
-    "@opentelemetry/semantic-conventions": "^1.18.1",
     "@socket.io/redis-adapter": "^8.2.1",
     "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",

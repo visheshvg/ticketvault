@@ -69,43 +69,6 @@ export const idempotencyHits = new client.Counter({
   registers: [register],
 });
 
-// ─── Outbox ───────────────────────────────────────────────────────────────────
-export const outboxPublished = new client.Counter({
-  name: 'outbox_events_published_total',
-  help: 'Total outbox events successfully published to Kafka',
-  registers: [register],
-});
-
-export const outboxLag = new client.Gauge({
-  name: 'outbox_unpublished_events',
-  help: 'Count of unpublished outbox events (processing lag)',
-  registers: [register],
-});
-
-// ─── DLQ ─────────────────────────────────────────────────────────────────────
-export const dlqDepth = new client.Counter({
-  name: 'dead_letter_events_total',
-  help: 'Total events moved to dead-letter queue by source',
-  labelNames: ['source'],
-  registers: [register],
-});
-
-// ─── Reconciliation ───────────────────────────────────────────────────────────
-export const reconciliationIssues = new client.Counter({
-  name: 'reconciliation_issues_total',
-  help: 'Drift issues detected by the reconciliation worker',
-  labelNames: ['issue_type'],
-  registers: [register],
-});
-
-// ─── Abuse prevention ─────────────────────────────────────────────────────────
-export const abuseBlocked = new client.Counter({
-  name: 'abuse_blocked_total',
-  help: 'Requests blocked by the abuse guard',
-  labelNames: ['reason'],
-  registers: [register],
-});
-
 // ─── SLI gauges (updated periodically, read by alerting rules) ───────────────
 export const bookingSuccessRate = new client.Gauge({
   name: 'booking_success_rate',
