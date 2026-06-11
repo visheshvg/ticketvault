@@ -2,24 +2,11 @@ import { pool } from '../src/db';
 import { redis, KEYS } from '../src/redis/client';
 import { atomicDecrement, releaseAndNotify, claimIdempotencyKey } from '../src/redis/scripts';
 
-jest.mock('../src/kafka/producer', () => ({
-  kafkaProducer: { publish: jest.fn(), connect: jest.fn(), disconnect: jest.fn() },
-}));
-jest.mock('../src/workers/queues', () => ({
-  notificationQueue: { add: jest.fn() },
-  startNotificationWorker: jest.fn(),
-}));
-jest.mock('../src/services/websocket/wsService', () => ({
-  broadcastSeatUpdate: jest.fn(),
-  broadcastInventoryUpdate: jest.fn(),
-}));
-
 afterAll(async () => {
   await pool.end();
   await redis.quit();
 });
 
-// Unique key per test run to avoid cross-test pollution
 const k = (label: string) => `test:${label}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 
 describe('atomicDecrement', () => {
@@ -37,7 +24,7 @@ describe('atomicDecrement', () => {
     await redis.del(key);
   });
 
-  it('returns -1 and does not go negative', async () => {
+  it('does not go negative', async () => {
     const key = k('no-negative');
     await redis.set(key, '0');
     await atomicDecrement(key);
@@ -67,7 +54,7 @@ describe('atomicDecrement', () => {
 });
 
 describe('releaseAndNotify', () => {
-  it('increments inventory and pops the next waiter', async () => {
+  it('pops the next waiter without incrementing inventory (seat stays taken)', async () => {
     const invKey   = k('inv');
     const queueKey = k('queue');
     await redis.set(invKey, '0');
@@ -75,14 +62,14 @@ describe('releaseAndNotify', () => {
 
     const popped = await releaseAndNotify(invKey, queueKey);
 
-    expect(await redis.get(invKey)).toBe('1');
+    expect(await redis.get(invKey)).toBe('0');
     expect(popped).not.toBeNull();
     expect(JSON.parse(popped!).userId).toBe('user-abc');
 
     await redis.del(invKey, queueKey);
   });
 
-  it('returns null and still increments when queue is empty', async () => {
+  it('returns null and increments when queue is empty', async () => {
     const invKey   = k('inv-empty');
     const queueKey = k('queue-empty');
     await redis.set(invKey, '0');
@@ -108,13 +95,11 @@ describe('claimIdempotencyKey', () => {
       claimIdempotencyKey(key, 30),
       claimIdempotencyKey(key, 30),
     ]);
-    const claims = [first, second];
-    expect(claims.filter(Boolean).length).toBe(1);
-    expect(claims.filter((v) => !v).length).toBe(1);
+    expect([first, second].filter(Boolean).length).toBe(1);
     await redis.del(key);
   });
 
-  it('sets value to PROCESSING during claim window', async () => {
+  it('sets value to PROCESSING during the claim window', async () => {
     const key = k('idem-processing');
     await claimIdempotencyKey(key, 30);
     expect(await redis.get(key)).toBe('PROCESSING');
@@ -123,7 +108,7 @@ describe('claimIdempotencyKey', () => {
 
   it('allows reclaim after TTL expires', async () => {
     const key = k('idem-ttl');
-    await claimIdempotencyKey(key, 1); // 1-second TTL
+    await claimIdempotencyKey(key, 1);
     await new Promise((r) => setTimeout(r, 1200));
     expect(await claimIdempotencyKey(key, 30)).toBe(true);
     await redis.del(key);

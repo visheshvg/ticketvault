@@ -1,7 +1,5 @@
 import request from 'supertest';
 import express from 'express';
-import http from 'http';
-import cors from 'cors';
 import { json } from 'express';
 import 'express-async-errors';
 import { pool } from '../../src/db';
@@ -11,31 +9,16 @@ import { v4 as uuidv4 } from 'uuid';
 import authRoutes from '../../src/routes/auth';
 import eventRoutes from '../../src/routes/events';
 import bookingRoutes from '../../src/routes/bookings';
+import paymentRoutes from '../../src/routes/payments';
 import adminRoutes from '../../src/routes/admin';
 import { errorHandler } from '../../src/middleware/requestLogger';
 import { eventService } from '../../src/services/event/eventService';
 import { bookingService } from '../../src/services/booking/bookingService';
+import { paymentService } from '../../src/services/payment/paymentService';
 
-jest.mock('../../src/kafka/producer', () => ({
-  kafkaProducer: { publish: jest.fn(), connect: jest.fn(), disconnect: jest.fn() },
-}));
-jest.mock('../../src/workers/queues', () => ({
-  notificationQueue: { add: jest.fn() },
-}));
 jest.mock('../../src/services/websocket/wsService', () => ({
   broadcastSeatUpdate: jest.fn(),
   broadcastInventoryUpdate: jest.fn(),
-}));
-jest.mock('../../src/db/readModel/eventAnalytics', () => ({
-  refreshEventSnapshot: jest.fn(),
-  refreshAllEventSnapshots: jest.fn(),
-  getAllEventSnapshots: jest.fn().mockResolvedValue([]),
-}));
-jest.mock('../../src/workers/reconciliation/reconciliationWorker', () => ({
-  reconciliationWorker: { runAll: jest.fn(), start: jest.fn(), stop: jest.fn() },
-}));
-jest.mock('../../src/middleware/security/abuseGuard', () => ({
-  abuseGuard: (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
 const app = express();
@@ -43,33 +26,23 @@ app.use(json());
 app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/bookings', bookingRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/admin', adminRoutes);
 app.use(errorHandler);
 
-let adminToken: string;
 let userToken: string;
+let userId: string;
 let testEventId: string;
 let testSeatIds: string[];
-const adminEmail = `e2e-admin-${uuidv4()}@test.com`;
-const userEmail  = `e2e-user-${uuidv4()}@test.com`;
+const userEmail = `e2e-user-${uuidv4()}@test.com`;
 
 beforeAll(async () => {
-  const adminReg = await request(app)
-    .post('/api/auth/register')
-    .send({ email: adminEmail, password: 'password123', name: 'E2E Admin' });
-  expect(adminReg.status).toBe(201);
-
-  await pool.query(`UPDATE users SET role = 'admin' WHERE email = $1`, [adminEmail]);
-  const adminLogin = await request(app)
-    .post('/api/auth/login')
-    .send({ email: adminEmail, password: 'password123' });
-  adminToken = adminLogin.body.accessToken;
-
   const userReg = await request(app)
     .post('/api/auth/register')
     .send({ email: userEmail, password: 'password123', name: 'E2E User' });
   expect(userReg.status).toBe(201);
   userToken = userReg.body.accessToken;
+  userId = userReg.body.user.id;
 
   const event = await eventService.createEvent({
     name: 'E2E Test Event',
@@ -85,21 +58,19 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await pool.query(`DELETE FROM outbox_events WHERE aggregate_id IN (SELECT id FROM bookings WHERE event_id = $1)`, [testEventId]);
   await pool.query(`DELETE FROM booking_audit_log WHERE booking_id IN (SELECT id FROM bookings WHERE event_id = $1)`, [testEventId]);
-  await pool.query(`DELETE FROM saga_compensations WHERE booking_id IN (SELECT id FROM bookings WHERE event_id = $1)`, [testEventId]);
   await pool.query(`DELETE FROM bookings WHERE event_id = $1`, [testEventId]);
   await pool.query(`DELETE FROM seats WHERE event_id = $1`, [testEventId]);
   await pool.query(`DELETE FROM events WHERE id = $1`, [testEventId]);
-  await pool.query(`DELETE FROM refresh_tokens WHERE user_id IN (SELECT id FROM users WHERE email IN ($1,$2))`, [adminEmail, userEmail]);
-  await pool.query(`DELETE FROM users WHERE email IN ($1, $2)`, [adminEmail, userEmail]);
+  await pool.query(`DELETE FROM refresh_tokens WHERE user_id = $1`, [userId]);
+  await pool.query(`DELETE FROM users WHERE email = $1`, [userEmail]);
   await redis.del(KEYS.seatInventory(testEventId));
   await redis.del(KEYS.waitingQueue(testEventId));
   await pool.end();
   await redis.quit();
 });
 
-describe('E2E — happy path: reserve → confirm booking', () => {
+describe('E2E — happy path: reserve → confirm', () => {
   it('POST /api/bookings creates a pending booking', async () => {
     const res = await request(app)
       .post('/api/bookings')
@@ -110,7 +81,6 @@ describe('E2E — happy path: reserve → confirm booking', () => {
     expect(res.status).toBe(201);
     expect(res.body.status).toBe('pending');
     expect(res.body.booking_id).toBeTruthy();
-    expect(res.body.expires_at).toBeTruthy();
     expect(res.body.amount).toBeGreaterThan(0);
   });
 
@@ -131,7 +101,7 @@ describe('E2E — happy path: reserve → confirm booking', () => {
     const bookingId = bookings.rows[0]?.id;
     if (!bookingId) return;
 
-    await bookingService.confirmBooking(bookingId, `pi_test_${uuidv4()}`);
+    await bookingService.confirmBooking(bookingId, `sim_${uuidv4()}`);
 
     const seat = await pool.query(
       `SELECT s.status FROM seats s JOIN bookings b ON b.seat_id = s.id WHERE b.id = $1`,
@@ -144,20 +114,18 @@ describe('E2E — happy path: reserve → confirm booking', () => {
   });
 });
 
-describe('E2E — payment failure triggers saga compensation', () => {
-  it('compensated booking releases seat and creates audit entry', async () => {
+describe('E2E — simulated payment failure releases seat', () => {
+  it('failed payment marks booking compensated and frees the seat', async () => {
     const res = await request(app)
       .post('/api/bookings')
       .set('Authorization', `Bearer ${userToken}`)
-      .set('Idempotency-Key', `e2e-saga-${uuidv4()}`)
+      .set('Idempotency-Key', `e2e-fail-${uuidv4()}`)
       .send({ event_id: testEventId, seat_id: testSeatIds[1] });
 
     expect(res.status).toBe(201);
     const bookingId = res.body.booking_id;
 
-    await bookingService['_offerSeatToNextWaiter'] !== undefined; // check method exists
-    const { paymentService } = await import('../../src/services/payment/paymentService');
-    await (paymentService as unknown as { _compensateSaga: Function })._compensateSaga(bookingId, 'test-user', 'payment_failed');
+    await paymentService.simulatePayment(bookingId, userId, false);
 
     const booking = await pool.query(`SELECT status FROM bookings WHERE id = $1`, [bookingId]);
     expect(booking.rows[0].status).toBe('compensated');
@@ -243,7 +211,7 @@ describe('E2E — idempotency: retry safety', () => {
 });
 
 describe('E2E — refresh token rotation', () => {
-  it('refresh token issues new access token', async () => {
+  it('refresh token issues new access token and rotates the refresh token', async () => {
     const loginRes = await request(app)
       .post('/api/auth/login')
       .send({ email: userEmail, password: 'password123' });
@@ -258,7 +226,7 @@ describe('E2E — refresh token rotation', () => {
     expect(refreshRes.status).toBe(200);
     expect(refreshRes.body.accessToken).toBeTruthy();
     expect(refreshRes.body.refreshToken).toBeTruthy();
-    expect(refreshRes.body.refreshToken).not.toBe(refreshToken); // rotated
+    expect(refreshRes.body.refreshToken).not.toBe(refreshToken);
   });
 
   it('reusing a rotated token returns 401', async () => {

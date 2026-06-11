@@ -4,19 +4,9 @@ import { bookingService } from '../../src/services/booking/bookingService';
 import { eventService } from '../../src/services/event/eventService';
 import { v4 as uuidv4 } from 'uuid';
 
-jest.mock('../../src/kafka/producer', () => ({
-  kafkaProducer: { publish: jest.fn(), connect: jest.fn(), disconnect: jest.fn() },
-}));
-jest.mock('../../src/workers/queues', () => ({
-  notificationQueue: { add: jest.fn() },
-}));
 jest.mock('../../src/services/websocket/wsService', () => ({
   broadcastSeatUpdate: jest.fn(),
   broadcastInventoryUpdate: jest.fn(),
-}));
-jest.mock('../../src/db/readModel/eventAnalytics', () => ({
-  refreshEventSnapshot: jest.fn(),
-  refreshAllEventSnapshots: jest.fn(),
 }));
 
 let testEventId: string;
@@ -46,7 +36,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await pool.query(`DELETE FROM booking_audit_log WHERE booking_id IN (SELECT id FROM bookings WHERE event_id = $1)`, [testEventId]);
-  await pool.query(`DELETE FROM outbox_events WHERE aggregate_id IN (SELECT id FROM bookings WHERE event_id = $1)`, [testEventId]);
   await pool.query(`DELETE FROM bookings WHERE event_id = $1`, [testEventId]);
   await pool.query(`DELETE FROM seats WHERE event_id = $1`, [testEventId]);
   await pool.query(`DELETE FROM events WHERE id = $1`, [testEventId]);
@@ -76,12 +65,6 @@ describe('Booking flow — happy path', () => {
 
     const bookingRows = await pool.query(`SELECT status FROM bookings WHERE id = $1`, [result.booking_id]);
     expect(bookingRows.rows[0].status).toBe('pending');
-
-    const outboxRows = await pool.query(
-      `SELECT event_type FROM outbox_events WHERE aggregate_id = $1`,
-      [result.booking_id]
-    );
-    expect(outboxRows.rows[0].event_type).toBe('BOOKING_CREATED');
   });
 
   it('idempotency: same key returns same booking_id', async () => {
@@ -116,7 +99,7 @@ describe('Booking flow — concurrency: no double-booking', () => {
     const seatId = testSeatIds[3];
 
     const results = await Promise.allSettled(
-      Array.from({ length: 50 }, (_, i) =>
+      Array.from({ length: 50 }, () =>
         bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: seatId }, `conc-${uuidv4()}`)
       )
     );
@@ -141,7 +124,7 @@ describe('Booking flow — concurrency: no double-booking', () => {
 });
 
 describe('Booking flow — waitlist', () => {
-  it('queues user when sold out then creates reservation on cancellation', async () => {
+  it('queues user when sold out', async () => {
     await redis.set(KEYS.seatInventory(testEventId), '0');
 
     const queuedResult = await bookingService.createBooking(testUserId, {
