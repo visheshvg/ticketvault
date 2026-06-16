@@ -7,9 +7,24 @@ import { logger } from '../utils/logger';
 // so we parse NUMERIC as float for ergonomic frontend display.
 types.setTypeParser(types.builtins.NUMERIC, (val) => parseFloat(val));
 
-export const pool = new Pool(config.db);
+const usingDatabaseUrl = !!process.env.DATABASE_URL;
+logger.info('Postgres pool init', {
+  using_database_url: usingDatabaseUrl,
+  host: usingDatabaseUrl ? '(from DATABASE_URL)' : config.db.host,
+});
 
-pool.on('error', (err) => logger.error('Unexpected pg pool error', { error: err.message }));
+export const pool = usingDatabaseUrl
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+    })
+  : new Pool(config.db);
+
+pool.on('error', (err) => logger.error('Unexpected pg pool error', {
+  error: err.message,
+  stack: err.stack,
+  code: (err as Error & { code?: string }).code,
+}));
 
 export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();

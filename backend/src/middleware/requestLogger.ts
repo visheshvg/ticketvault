@@ -30,8 +30,12 @@ export function errorHandler(err: Error & { code?: string }, req: Request, res: 
     return;
   }
 
+  const aggregateErrors = (err as Error & { errors?: Error[] }).errors;
   logger.error('Unhandled error', {
-    error: err.message,
+    error: err.message || '(empty)',
+    code: err.code,
+    name: err.name,
+    aggregate_errors: aggregateErrors?.map((e) => ({ message: e.message, code: (e as Error & { code?: string }).code })),
     stack: err.stack,
     path: req.path,
     method: req.method,
