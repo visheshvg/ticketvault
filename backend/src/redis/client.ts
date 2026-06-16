@@ -5,15 +5,23 @@ import { logger } from '../utils/logger';
 // No keyPrefix on the client — KEYS functions include the prefix explicitly.
 // ioredis does NOT apply keyPrefix to eval() KEYS arguments, so using it
 // would cause Lua scripts to read different keys than normal commands.
-export const redis = new Redis({
-  host: config.redis.host,
-  port: config.redis.port,
-  password: config.redis.password,
-  retryStrategy: (times) => Math.min(times * 50, 2000),
-  enableOfflineQueue: true,
-  maxRetriesPerRequest: 3,
-  lazyConnect: false,
-});
+export const redis = process.env.REDIS_URL
+  ? new Redis(process.env.REDIS_URL, {
+      retryStrategy: (times) => Math.min(times * 200, 5000),
+      enableOfflineQueue: true,
+      maxRetriesPerRequest: 20,
+      lazyConnect: false,
+      tls: process.env.REDIS_URL.startsWith('rediss://') ? {} : undefined,
+    })
+  : new Redis({
+      host: config.redis.host,
+      port: config.redis.port,
+      password: config.redis.password,
+      retryStrategy: (times) => Math.min(times * 50, 2000),
+      enableOfflineQueue: true,
+      maxRetriesPerRequest: 3,
+      lazyConnect: false,
+    });
 
 redis.on('error', (err) => logger.error('Redis error', { error: err.message }));
 redis.on('connect', () => logger.info('Redis connected'));
