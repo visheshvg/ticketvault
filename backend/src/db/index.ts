@@ -1,6 +1,11 @@
-import { Pool, PoolClient } from 'pg';
+import { Pool, PoolClient, types } from 'pg';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+
+// Postgres NUMERIC defaults to string in pg-node (preserves arbitrary precision).
+// Our domain only stores money up to ~$10000, well inside JS Number range,
+// so we parse NUMERIC as float for ergonomic frontend display.
+types.setTypeParser(types.builtins.NUMERIC, (val) => parseFloat(val));
 
 export const pool = new Pool(config.db);
 
