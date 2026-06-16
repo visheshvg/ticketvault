@@ -11,6 +11,4 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/src/$1',
   },
   testTimeout: 60000,
-  // Run all test suites sequentially to avoid port conflicts on shared infra
-  runInBand: true,
 };

@@ -58,15 +58,7 @@ export const paymentsApi = {
 };
 
 export const adminApi = {
-  dashboard: ()                   => api.get('/admin/dashboard').then(r => r.data),
-  audit: (bookingId: string)      => api.get(`/admin/audit/${bookingId}`).then(r => r.data),
-  queue: (eventId: string)        => api.get(`/admin/queue/${eventId}`).then(r => r.data),
-  compensations: ()               => api.get('/admin/compensations').then(r => r.data),
-  reconciliationIssues: ()        => api.get('/admin/reconciliation/issues').then(r => r.data),
-  resolveIssue: (id: string)      => api.post(`/admin/reconciliation/resolve/${id}`).then(r => r.data),
-  triggerReconciliation: ()       => api.post('/admin/reconciliation/run').then(r => r.data),
-  dlq: ()                         => api.get('/admin/dlq').then(r => r.data),
-  replayDLQ: (id: string)         => api.post(`/admin/dlq/replay/${id}`).then(r => r.data),
-  deleteDLQ: (id: string)         => api.delete(`/admin/dlq/${id}`).then(r => r.data),
-  outboxLag: ()                   => api.get('/admin/outbox/lag').then(r => r.data),
+  dashboard: ()              => api.get('/admin/dashboard').then(r => r.data),
+  audit: (bookingId: string) => api.get(`/admin/audit/${bookingId}`).then(r => r.data),
+  queue: (eventId: string)   => api.get(`/admin/queue/${eventId}`).then(r => r.data),
 };

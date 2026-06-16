@@ -5,48 +5,42 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
 } from 'recharts';
 import {
-  DollarSign, Clock, AlertTriangle, Activity, RefreshCw,
-  ChevronRight, CheckCircle, XCircle, AlertCircle, Inbox,
+  DollarSign, Clock, AlertTriangle, Activity, RefreshCw, CheckCircle, ChevronRight,
 } from 'lucide-react';
 import { toast } from '../common/Toast';
 import { format } from 'date-fns';
 
+interface EventRow {
+  event_id: string;
+  event_name: string;
+  venue: string;
+  total_seats: number;
+  booked_count: string;
+  reserved_count: string;
+  available_count: string;
+  confirmed_revenue: string;
+}
+
 interface DashboardData {
   bookings: { total: string; confirmed: string; pending: string; expired: string; compensated: string };
   revenue: number;
-  events: Array<{ id: string; name: string; available_seats: number; total_seats: number; booked_count?: number; confirmed_revenue?: number }>;
+  events: EventRow[];
 }
 
-interface ReconciliationIssue {
-  id: string; issue_type: string; description: string; detected_at: string;
-}
-
-interface DLQEvent {
-  id: string; source: string; event_type: string; error: string | null; attempts: number; last_failed: string;
-}
-
-type Tab = 'overview' | 'events' | 'reconciliation' | 'dlq';
+type Tab = 'overview' | 'events';
 
 const PIE_COLORS = ['#22c55e', '#f59e0b', '#ef4444', '#6366f1'];
 
 export function AdminDashboard() {
   const [tab, setTab] = useState<Tab>('overview');
   const [data, setData] = useState<DashboardData | null>(null);
-  const [issues, setIssues] = useState<ReconciliationIssue[]>([]);
-  const [dlq, setDlq] = useState<DLQEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(new Date());
 
   const refresh = useCallback(async () => {
     try {
-      const [dash, reconData, dlqData] = await Promise.all([
-        adminApi.dashboard(),
-        adminApi.reconciliationIssues(),
-        adminApi.dlq(),
-      ]);
+      const dash = await adminApi.dashboard();
       setData(dash);
-      setIssues(reconData.issues ?? []);
-      setDlq(dlqData.events ?? []);
       setLastRefresh(new Date());
     } catch {
       toast.error('Failed to refresh dashboard');
@@ -60,24 +54,6 @@ export function AdminDashboard() {
     const id = setInterval(refresh, 15_000);
     return () => clearInterval(id);
   }, [refresh]);
-
-  const handleResolveIssue = async (id: string) => {
-    await adminApi.resolveIssue(id);
-    setIssues(prev => prev.filter(i => i.id !== id));
-    toast.success('Issue marked resolved');
-  };
-
-  const handleReplayDLQ = async (id: string) => {
-    await adminApi.replayDLQ(id);
-    setDlq(prev => prev.filter(e => e.id !== id));
-    toast.success('Event re-queued for processing');
-  };
-
-  const handleDeleteDLQ = async (id: string) => {
-    await adminApi.deleteDLQ(id);
-    setDlq(prev => prev.filter(e => e.id !== id));
-    toast.success('Dead-letter event deleted');
-  };
 
   if (loading) {
     return (
@@ -100,7 +76,6 @@ export function AdminDashboard() {
   const { bookings, revenue, events } = data;
   const totalBookings = parseInt(bookings.total);
 
-  // Pie chart data for booking status breakdown
   const pieData = [
     { name: 'Confirmed', value: parseInt(bookings.confirmed) },
     { name: 'Pending', value: parseInt(bookings.pending) },
@@ -111,8 +86,6 @@ export function AdminDashboard() {
   const tabs: Array<{ id: Tab; label: string; count?: number }> = [
     { id: 'overview', label: 'Overview' },
     { id: 'events', label: 'Events', count: events.length },
-    { id: 'reconciliation', label: 'Reconciliation', count: issues.length },
-    { id: 'dlq', label: 'Dead Letters', count: dlq.length },
   ];
 
   return (
@@ -129,8 +102,8 @@ export function AdminDashboard() {
               {t.count !== undefined && t.count > 0 && (
                 <span style={{
                   marginLeft: 6,
-                  background: t.id === 'reconciliation' || t.id === 'dlq' ? 'var(--error-dim)' : 'var(--accent-dim)',
-                  color: t.id === 'reconciliation' || t.id === 'dlq' ? 'var(--error)' : 'var(--accent-light)',
+                  background: 'var(--accent-dim)',
+                  color: 'var(--accent-light)',
                   borderRadius: 'var(--r-full)',
                   padding: '1px 7px',
                   fontSize: '0.7rem',
@@ -235,26 +208,19 @@ export function AdminDashboard() {
             )}
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-            <HealthCard
-              icon={AlertCircle}
-              title="Reconciliation Issues"
-              value={issues.length}
-              color={issues.length > 0 ? 'var(--warning)' : 'var(--success)'}
-              onClick={() => setTab('reconciliation')}
-            />
-            <HealthCard
-              icon={Inbox}
-              title="Dead-letter Queue"
-              value={dlq.length}
-              color={dlq.length > 0 ? 'var(--error)' : 'var(--success)'}
-              onClick={() => setTab('dlq')}
-            />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
             <HealthCard
               icon={Activity}
               title="Total Bookings"
               value={totalBookings}
               color="var(--accent-light)"
+            />
+            <HealthCard
+              icon={CheckCircle}
+              title="Published Events"
+              value={events.length}
+              color="var(--success)"
+              onClick={() => setTab('events')}
             />
           </div>
         </div>
@@ -264,110 +230,25 @@ export function AdminDashboard() {
         <div>
           <p className="admin-section-title">Live Event Occupancy</p>
           {events.map(event => {
-            const booked = event.total_seats - event.available_seats;
+            const available = parseInt(event.available_count);
+            const booked = event.total_seats - available;
             const pct = event.total_seats > 0 ? Math.round((booked / event.total_seats) * 100) : 0;
             const barColor = pct > 90 ? 'var(--error)' : pct > 70 ? 'var(--warning)' : 'var(--accent)';
             return (
-              <div key={event.id} className="event-table-row">
-                <span className="event-table-name" title={event.name}>{event.name}</span>
+              <div key={event.event_id} className="event-table-row">
+                <span className="event-table-name" title={event.event_name}>{event.event_name}</span>
                 <div>
                   <div className="occupancy-track">
                     <div className="occupancy-fill" style={{ width: `${pct}%`, background: barColor }} />
                   </div>
                 </div>
                 <span className="occupancy-pct" style={{ color: barColor }}>{pct}%</span>
-                <span className="seats-left-label">{event.available_seats} left</span>
+                <span className="seats-left-label">{available} left</span>
               </div>
             );
           })}
           {!events.length && (
             <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', padding: '20px 0' }}>No published events.</p>
-          )}
-        </div>
-      )}
-
-      {tab === 'reconciliation' && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <p className="admin-section-title" style={{ marginBottom: 0 }}>Unresolved Drift Issues</p>
-            <button className="btn btn-secondary btn-sm" onClick={() => adminApi.triggerReconciliation().then(() => toast.success('Reconciliation triggered')).catch(() => toast.error('Failed'))}>
-              <RefreshCw size={12} /> Run Now
-            </button>
-          </div>
-
-          {!issues.length ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '24px 0', color: 'var(--success)' }}>
-              <CheckCircle size={18} />
-              <span style={{ fontSize: '0.875rem' }}>No drift detected — system is consistent.</span>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {issues.map(issue => (
-                <div key={issue.id} className="card" style={{ padding: '14px 18px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                      <span className="badge badge-warning">{issue.issue_type.replace(/_/g, ' ')}</span>
-                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                        {format(new Date(issue.detected_at), 'MMM d · HH:mm')}
-                      </span>
-                    </div>
-                    <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                      {issue.description}
-                    </p>
-                  </div>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    style={{ flexShrink: 0 }}
-                    onClick={() => handleResolveIssue(issue.id)}
-                  >
-                    <CheckCircle size={12} /> Resolve
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {tab === 'dlq' && (
-        <div>
-          <p className="admin-section-title">Dead-letter Events</p>
-          {!dlq.length ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '24px 0', color: 'var(--success)' }}>
-              <CheckCircle size={18} />
-              <span style={{ fontSize: '0.875rem' }}>No dead-letter events — all jobs processed successfully.</span>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {dlq.map(evt => (
-                <div key={evt.id} className="card" style={{ padding: '14px 18px' }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                        <span className="badge badge-error">{evt.source}</span>
-                        <code style={{ fontSize: '0.75rem' }}>{evt.event_type}</code>
-                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                          {evt.attempts} attempts · last failed {format(new Date(evt.last_failed), 'HH:mm')}
-                        </span>
-                      </div>
-                      {evt.error && (
-                        <p style={{ fontSize: '0.78rem', color: 'var(--error)', background: 'var(--error-dim)', padding: '4px 8px', borderRadius: 4, fontFamily: 'monospace' }}>
-                          {evt.error}
-                        </p>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-                      <button className="btn btn-secondary btn-sm" onClick={() => handleReplayDLQ(evt.id)}>
-                        <RefreshCw size={12} /> Replay
-                      </button>
-                      <button className="btn btn-danger btn-sm" onClick={() => handleDeleteDLQ(evt.id)}>
-                        <XCircle size={12} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
           )}
         </div>
       )}
