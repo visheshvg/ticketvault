@@ -6,7 +6,6 @@ import helmet from 'helmet';
 import compression from 'compression';
 import { globalRateLimit } from './middleware/rateLimiter';
 import { requestLogger, errorHandler } from './middleware/requestLogger';
-import { register } from './utils/metrics';
 import { logger } from './utils/logger';
 import { expiryWorker } from './workers/expiryWorker';
 import { initWebSocketServer } from './services/websocket/wsService';
@@ -30,10 +29,6 @@ app.use(requestLogger);
 app.use(globalRateLimit);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
-app.get('/metrics', async (_req, res) => {
-  res.set('Content-Type', register.contentType);
-  res.send(await register.metrics());
-});
 
 app.use('/api/auth', authRoutes);
 app.use('/api/events', eventRoutes);

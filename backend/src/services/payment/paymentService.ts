@@ -2,7 +2,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { withTransaction, query } from '../../db';
 import { redis, KEYS } from '../../redis/client';
 import { bookingService } from '../booking/bookingService';
-import { paymentSuccessTotal, paymentFailureTotal } from '../../utils/metrics';
 import { paymentLogger } from '../../utils/logger';
 
 // Simulated payment service used for the public demo.
@@ -43,13 +42,11 @@ export class PaymentService {
 
     if (success) {
       await bookingService.confirmBooking(bookingId, paymentId);
-      paymentSuccessTotal.inc();
       paymentLogger.info('Payment confirmed (simulated)', { booking_id: bookingId, user_id: userId });
       return;
     }
 
-    paymentFailureTotal.inc();
-    paymentLogger.warn('Payment failed (simulated) — releasing seat', { booking_id: bookingId });
+    paymentLogger.warn('Payment failed (simulated), releasing seat', { booking_id: bookingId });
 
     let eventId: string | null = null;
     let seatId: string | null = null;

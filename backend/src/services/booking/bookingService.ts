@@ -6,9 +6,6 @@ import { atomicDecrement, releaseAndNotify, claimIdempotencyKey } from '../../re
 import { config } from '../../config';
 import { Booking, BookingResponse, CreateBookingRequest, Seat } from '../../types';
 import { bookingLogger } from '../../utils/logger';
-import {
-  bookingTotal, bookingDuration, queueDepth, redisLuaConflicts, idempotencyHits,
-} from '../../utils/metrics';
 import { eventService } from '../event/eventService';
 import { broadcastSeatUpdate, broadcastInventoryUpdate } from '../websocket/wsService';
 
@@ -21,17 +18,12 @@ export class BookingService {
     data: CreateBookingRequest,
     idempotencyKey: string
   ): Promise<BookingResponse> {
-    const timer = bookingDuration.startTimer({ stage: 'total' });
     const idemKey = KEYS.idempotency(idempotencyKey);
 
     const claimed = await claimIdempotencyKey(idemKey, IDEMPOTENCY_PROCESSING_TTL);
     if (!claimed) {
       const cached = await this._waitForIdempotentResponse(idemKey);
-      if (cached) {
-        idempotencyHits.inc();
-        timer();
-        return cached;
-      }
+      if (cached) return cached;
     }
 
     const event = await eventService.getEventById(data.event_id);
@@ -41,19 +33,14 @@ export class BookingService {
     const amount = eventService.calculatePrice(event.base_price, event.available_seats, event.total_seats);
     const inventoryKey = KEYS.seatInventory(data.event_id);
 
-    const t2 = bookingDuration.startTimer({ stage: 'redis_decr' });
     const remaining = await atomicDecrement(inventoryKey);
-    t2();
 
     if (remaining === -1) {
-      redisLuaConflicts.inc();
       const queueKey = KEYS.waitingQueue(data.event_id);
       const position = await redis.lpush(
         queueKey,
         JSON.stringify({ userId, seatId: data.seat_id, timestamp: Date.now() })
       );
-      queueDepth.labels(data.event_id).set(position);
-      bookingTotal.inc({ status: 'queued' });
 
       const response: BookingResponse = {
         booking_id: '',
@@ -64,18 +51,15 @@ export class BookingService {
         message: `You are #${position} in the waiting list. We'll notify you when a seat opens.`,
       };
       await redis.setex(idemKey, config.reservation.idempotencyTtlSeconds, JSON.stringify(response));
-      timer();
       return response;
     }
 
     if (remaining === -2) {
       await eventService.initRedisInventory(data.event_id);
       await redis.del(idemKey);
-      timer();
       throw new Error('Inventory initializing, please retry in a moment');
     }
 
-    const t3 = bookingDuration.startTimer({ stage: 'pg_transaction' });
     let response: BookingResponse;
 
     try {
@@ -87,8 +71,6 @@ export class BookingService {
       await redis.del(idemKey);
       bookingLogger.error('Booking transaction failed, inventory restored', { error: (err as Error).message });
       throw err;
-    } finally {
-      t3();
     }
 
     await redis.setex(
@@ -108,8 +90,6 @@ export class BookingService {
     });
     broadcastInventoryUpdate(data.event_id, remaining, amount);
 
-    bookingTotal.inc({ status: 'pending' });
-    timer();
     return response;
   }
 

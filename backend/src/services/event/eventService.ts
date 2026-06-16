@@ -4,7 +4,6 @@ import { redis, KEYS } from '../../redis/client';
 import { config } from '../../config';
 import { Event, PriceTier } from '../../types';
 import { logger } from '../../utils/logger';
-import { seatInventoryGauge } from '../../utils/metrics';
 
 interface CreateEventInput {
   name: string;
@@ -104,7 +103,6 @@ export class EventService {
       }
 
       await redis.set(KEYS.seatInventory(event.id), data.total_seats.toString());
-      seatInventoryGauge.labels(event.id).set(data.total_seats);
 
       logger.info('Event created', { event_id: event.id, seats: data.total_seats });
       return event;
@@ -127,7 +125,6 @@ export class EventService {
     );
     const count = parseInt(rows[0].count, 10);
     await redis.set(KEYS.seatInventory(eventId), count.toString());
-    seatInventoryGauge.labels(eventId).set(count);
     logger.info('Redis inventory initialized', { event_id: eventId, count });
   }
 }
