@@ -6,6 +6,7 @@ import { atomicDecrement, releaseAndNotify, claimIdempotencyKey } from '../../re
 import { config } from '../../config';
 import { Booking, BookingResponse, CreateBookingRequest, Seat } from '../../types';
 import { bookingLogger } from '../../utils/logger';
+import { HttpError } from '../../utils/httpErrors';
 import { eventService } from '../event/eventService';
 import { broadcastSeatUpdate, broadcastInventoryUpdate } from '../websocket/wsService';
 
@@ -27,8 +28,8 @@ export class BookingService {
     }
 
     const event = await eventService.getEventById(data.event_id);
-    if (!event) throw new Error('Event not found');
-    if (event.status !== 'published') throw new Error('Event is not accepting bookings');
+    if (!event) throw new HttpError(404, 'Event not found');
+    if (event.status !== 'published') throw new HttpError(422, 'Event is not accepting bookings');
 
     const amount = eventService.calculatePrice(event.base_price, event.available_seats, event.total_seats);
     const inventoryKey = KEYS.seatInventory(data.event_id);
@@ -57,7 +58,7 @@ export class BookingService {
     if (remaining === -2) {
       await eventService.initRedisInventory(data.event_id);
       await redis.del(idemKey);
-      throw new Error('Inventory initializing, please retry in a moment');
+      throw new HttpError(503, 'Inventory initializing, please retry in a moment');
     }
 
     let response: BookingResponse;
@@ -117,9 +118,9 @@ export class BookingService {
       `SELECT * FROM seats WHERE id = $1 FOR UPDATE NOWAIT`,
       [data.seat_id]
     );
-    if (!seatRows.rows.length) throw new Error('Seat not found');
+    if (!seatRows.rows.length) throw new HttpError(404, 'Seat not found');
     const seat = seatRows.rows[0];
-    if (seat.status !== 'available') throw new Error(`Seat is ${seat.status}, cannot book`);
+    if (seat.status !== 'available') throw new HttpError(409, `Seat is ${seat.status}, cannot book`);
 
     const bookingId = uuidv4();
     const expiresAt = new Date(Date.now() + config.reservation.ttlSeconds * 1000);
@@ -176,10 +177,10 @@ export class BookingService {
         `SELECT * FROM bookings WHERE id = $1 AND user_id = $2 FOR UPDATE`,
         [bookingId, userId]
       );
-      if (!rows.rows.length) throw new Error('Booking not found');
+      if (!rows.rows.length) throw new HttpError(404, 'Booking not found');
       const booking = rows.rows[0];
       if (!['pending', 'confirmed'].includes(booking.status)) {
-        throw new Error(`Cannot cancel booking with status: ${booking.status}`);
+        throw new HttpError(409, `Cannot cancel booking with status: ${booking.status}`);
       }
 
       const oldStatus = booking.status;
@@ -230,7 +231,7 @@ export class BookingService {
          RETURNING seat_id, event_id, user_id, amount_paid`,
         [stripePaymentIntentId, bookingId]
       );
-      if (!result.rows.length) throw new Error(`Booking ${bookingId} not found or non-confirmable`);
+      if (!result.rows.length) throw new HttpError(409, `Booking ${bookingId} not found or non-confirmable`);
 
       seatId = result.rows[0].seat_id;
       eventId = result.rows[0].event_id;

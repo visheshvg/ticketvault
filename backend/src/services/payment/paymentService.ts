@@ -3,6 +3,7 @@ import { withTransaction, query } from '../../db';
 import { redis, KEYS } from '../../redis/client';
 import { bookingService } from '../booking/bookingService';
 import { paymentLogger } from '../../utils/logger';
+import { HttpError } from '../../utils/httpErrors';
 
 // Simulated payment service used for the public demo.
 // In a production build this would call Stripe / Razorpay / Adyen — same
@@ -15,10 +16,10 @@ export class PaymentService {
       `SELECT amount_paid, status, user_id FROM bookings WHERE id = $1`,
       [bookingId]
     );
-    if (!bookings.length) throw new Error('Booking not found');
+    if (!bookings.length) throw new HttpError(404, 'Booking not found');
     const booking = bookings[0];
-    if (booking.user_id !== userId) throw new Error('Forbidden');
-    if (booking.status !== 'pending') throw new Error(`Booking status is ${booking.status}`);
+    if (booking.user_id !== userId) throw new HttpError(403, 'Forbidden');
+    if (booking.status !== 'pending') throw new HttpError(409, `Booking status is ${booking.status}`);
 
     const paymentId = `sim_${uuidv4()}`;
     await query(
@@ -35,8 +36,8 @@ export class PaymentService {
       `SELECT stripe_payment_intent_id, user_id FROM bookings WHERE id = $1`,
       [bookingId]
     );
-    if (!bookings.length) throw new Error('Booking not found');
-    if (bookings[0].user_id !== userId) throw new Error('Forbidden');
+    if (!bookings.length) throw new HttpError(404, 'Booking not found');
+    if (bookings[0].user_id !== userId) throw new HttpError(403, 'Forbidden');
 
     const paymentId = bookings[0].stripe_payment_intent_id ?? `sim_${uuidv4()}`;
 
