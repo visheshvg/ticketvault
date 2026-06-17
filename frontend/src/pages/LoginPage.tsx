@@ -43,15 +43,15 @@ export function LoginPage() {
         </div>
         <h1 className="auth-visual-title">TicketVault</h1>
         <p className="auth-visual-sub">
-          A distributed booking engine built for concurrency, reliability, and zero double-bookings.
+          Concurrency-safe ticket booking with atomic seat reservations and verified zero double-bookings under load.
         </p>
 
         <div className="auth-visual-stats">
           {[
-            { icon: Zap, value: '< 40ms', label: 'p99 latency' },
+            { icon: Zap, value: '155ms', label: 'p99 latency' },
             { icon: Shield, value: '0', label: 'double-bookings' },
             { icon: Clock, value: '10 min', label: 'seat hold window' },
-            { icon: Ticket, value: '99.5%', label: 'booking SLO' },
+            { icon: Ticket, value: '500', label: 'concurrent users tested' },
           ].map(({ icon: Icon, value, label }) => (
             <div key={label} className="auth-stat-card">
               <Icon size={14} style={{ color: 'var(--accent-light)', marginBottom: 6, opacity: 0.7 }} />

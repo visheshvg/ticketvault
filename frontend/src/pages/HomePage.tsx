@@ -40,7 +40,7 @@ export function HomePage() {
         <div className="container">
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
             <div className="hero-eyebrow">
-              <Zap size={11} /> Millisecond-fast booking engine
+              <Zap size={11} /> Concurrency-safe booking
             </div>
             <h1 className="hero-title">
               Find Your Next<br />Live Experience
@@ -58,10 +58,10 @@ export function HomePage() {
             transition={{ delay: 0.3, duration: 0.5 }}
           >
             {[
-              { value: '< 40ms', label: 'p99 booking latency' },
+              { value: '155ms', label: 'p99 booking latency' },
               { value: '0', label: 'double-bookings' },
-              { value: '100k+', label: 'Redis ops/sec' },
-              { value: '99.5%', label: 'SLO target' },
+              { value: '500', label: 'concurrent users tested' },
+              { value: '550/s', label: 'sustained throughput' },
             ].map(s => (
               <div className="hero-stat" key={s.label}>
                 <div className="hero-stat-value">{s.value}</div>
