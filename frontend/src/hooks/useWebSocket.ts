@@ -12,7 +12,7 @@ export function useEventWebSocket(eventId: string | null) {
   useEffect(() => {
     if (!eventId || !token) return;
 
-    const socket = io('/', {
+    const socket = io(import.meta.env.VITE_API_URL || '/', {
       auth: { token },
       transports: ['websocket'],
     });
