@@ -35,9 +35,9 @@ export const config = {
 
   rateLimit: {
     windowMs: 60_000,
-    maxRequests: 100,
+    maxRequests: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
     bookingWindowMs: 60_000,
-    maxBookings: 5,
+    maxBookings: parseInt(process.env.BOOKING_RATE_LIMIT_MAX || '5', 10),
   },
 
   pricing: {

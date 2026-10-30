@@ -13,7 +13,7 @@ LOGIN=$(curl -sf -X POST "$BASE/api/auth/login" \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@ticketvault.com","password":"admin123"}')
 
-TOKEN=$(echo "$LOGIN" | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+TOKEN=$(echo "$LOGIN" | python3 -c "import sys,json; print(json.load(sys.stdin)['accessToken'])")
 echo "  Token obtained."
 
 echo ""
@@ -45,13 +45,11 @@ echo "Run load test:"
 echo ""
 echo "  EVENT_ID=$EVENT_ID \\"
 echo "  SEAT_IDS=$SEAT_IDS \\"
-echo "  AUTH_TOKEN=$TOKEN \\"
 echo "  k6 run scripts/load-test.js"
 echo ""
 echo "Run chaos test:"
 echo ""
 echo "  EVENT_ID=$EVENT_ID \\"
 echo "  SEAT_IDS=$SEAT_IDS \\"
-echo "  AUTH_TOKEN=$TOKEN \\"
 echo "  ./scripts/chaos-test.sh"
 echo "================================================================"

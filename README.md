@@ -10,9 +10,9 @@ A ticket booking app built to handle a lot of concurrent users trying to book th
 
 ## What it does
 
-You can browse events, pick a seat, hold it for 5 minutes, and then pay (the payment is simulated). The seat map updates in real time over WebSocket, so you can see other people's bookings come in while you're looking at the page.
+You can browse events, pick a seat, hold it for 10 minutes, and then pay (the payment is simulated). The seat map updates in real time over WebSocket, so you can see other people's bookings come in while you're looking at the page.
 
-The core engineering challenge: when 500 users hit 'reserve' on the same seat simultaneously, only one booking should actually go through. The rest should get a clean response, not a duplicate row in the database and not a 500 error.
+The core engineering challenge: when 500 virtual users (k6) hit 'reserve' on the same seat simultaneously, only one booking should actually go through. The rest should get a clean response, not a duplicate row in the database and not a 500 error.
 
 ---
 
@@ -53,12 +53,14 @@ The integration test in `tests/integration/bookingFlow.test.ts` fires 50 concurr
 
 ## Performance
 
-Tested with k6 against the same backend code that runs on the live demo. Postgres and Redis are running in Docker for these tests.
+Tested with k6 against the production build of the backend, running locally on a laptop with Postgres and Redis in Docker. Each run uses a fresh 50-seat event and 50 test users, and lasts 35 s (10 s ramp up, 20 s hold, 5 s ramp down). Rate limits were raised for these runs so every request goes through the full booking path (Lua gate, row lock, transaction).
 
-| Test | VUs | Successful bookings | Doubles in DB | p99 latency | Throughput |
-|---|---|---|---|---|---|
-| Realistic load | 100 | 50 | 0 | 155 ms | 552 req/s |
-| Stress test | 500 | 50 | 0 | 890 ms | 550 req/s |
+| Test | VUs | Requests | Booked (201) | Queued (202) | Seat taken (409) | 5xx | Doubles in DB | p99 latency | Throughput |
+|---|---|---|---|---|---|---|---|---|---|
+| Load | 100 | 43,231 | 50 | 42,981 | 148 | 0 | 0 | 33 ms | 952 req/s |
+| Stress | 500 | 89,026 | 50 | 88,726 | 195 | 0 | 0 | 191 ms | 1,945 req/s |
+
+Once all 50 seats are taken, the Redis counter hits 0 and every further request is put on the waitlist (202) without touching Postgres.
 
 After every test, the database is checked directly for any seat with more than one active booking:
 
@@ -70,7 +72,11 @@ GROUP BY seat_id HAVING COUNT(*) > 1;
 
 Result every time: `(0 rows)`.
 
-Screenshots of the k6 output and the database check are in [`docs/`](docs/).
+![k6 stress test, 500 VUs](docs/stress-test-500VU.png)
+
+![Database check after the stress test](docs/no-double-booking-db.png)
+
+Full k6 output for both runs is in [`docs/k6-100VU.txt`](docs/k6-100VU.txt) and [`docs/k6-500VU.txt`](docs/k6-500VU.txt).
 
 ---
 
@@ -85,7 +91,7 @@ Screenshots of the k6 output and the database check are in [`docs/`](docs/).
 | Auth | JWT plus single-use refresh tokens |
 | Frontend | React 18, Vite, Zustand |
 | Tests | Jest (unit, integration, e2e), k6 (load) |
-| CI | GitHub Actions (typecheck on every push) |
+| CI | GitHub Actions (typecheck + all Jest suites against Postgres and Redis on every push) |
 | Hosting | Render (API), Neon (Postgres), Upstash (Redis), Vercel (frontend) |
 
 ---
@@ -93,7 +99,7 @@ Screenshots of the k6 output and the database check are in [`docs/`](docs/).
 ## Features
 
 - Browse events with a live seat map
-- Reserve a seat with a 5-minute hold and visible countdown
+- Reserve a seat with a 10-minute hold and visible countdown
 - `Idempotency-Key` header on the booking endpoint so client retries never create duplicate bookings
 - Waitlist queue when an event is sold out, with position tracking
 - Real-time seat availability updates over WebSocket
@@ -129,7 +135,7 @@ What happens when someone clicks "reserve seat":
 4. Otherwise open a Postgres transaction.
 5. Lock the seat row with `SELECT FOR UPDATE NOWAIT`.
 6. Mark the seat reserved, insert the booking row, and write the audit log entry.
-7. Set the 5-minute reservation TTL in Redis.
+7. Set the 10-minute reservation TTL in Redis.
 8. Broadcast the seat update over WebSocket so other browsers see it immediately.
 
 ---
@@ -179,7 +185,26 @@ All 25 tests pass against a freshly migrated database.
 
 ![Test suite output](docs/test-results.png)
 
-To run the k6 load test you need the backend running on `localhost:3000`. See `scripts/load-test.js` for the test script.
+### Load test (k6)
+
+Build the backend and start it with raised rate limits. All virtual users share one IP, so the per-IP limit would otherwise answer almost every request with a 429:
+
+```bash
+cd backend
+npm run build
+NODE_ENV=production RATE_LIMIT_MAX=1000000 BOOKING_RATE_LIMIT_MAX=1000000 node dist/server.js
+```
+
+Then seed an event and run the test:
+
+```bash
+SEATS=50 ./scripts/seed-load-test.sh          # prints EVENT_ID and SEAT_IDS
+EVENT_ID=... SEAT_IDS=... VUS=500 k6 run scripts/load-test.js
+```
+
+The script registers a pool of test users (50 by default, `USERS=` to change it) and spreads the virtual users across them. Responses are counted by status code (`status_201_booked`, `status_202_queued`, `status_409_seat_taken`, `status_429_rate_limited`, `status_5xx`). 4xx responses are expected under contention. The test fails only on 5xx errors or slow p99 latency.
+
+To see the per-user booking limit at work, leave `BOOKING_RATE_LIMIT_MAX` at its default of 5 per minute. Most requests then come back as 429.
 
 ---
 
@@ -187,7 +212,7 @@ To run the k6 load test you need the backend running on `localhost:3000`. See `s
 
 ```
 ticketvault/
-├── .github/workflows/ci.yml      Typecheck on every push
+├── .github/workflows/ci.yml      Typecheck + tests on every push
 ├── backend/
 │   ├── src/
 │   │   ├── routes/               auth, events, bookings, payments, admin
