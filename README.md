@@ -64,16 +64,20 @@ The integration test in `tests/integration/bookingFlow.test.ts` fires 50 concurr
 
 ## Performance
 
-Tested with k6 against the production build of the backend, running locally on a laptop with Postgres and Redis in Docker. Each run uses a fresh 50-seat event and 50 test users, and lasts 35 s (10 s ramp up, 20 s hold, 5 s ramp down). Rate limits were raised for these runs so every request goes through the full booking path (Lua gate, row lock, transaction).
+Tested with k6 against the production build of the backend, running locally on a laptop with Postgres and Redis in Docker. Each run uses a fresh 50-seat event and 50 test users, and lasts 35 s (10 s ramp up, 20 s hold, 5 s ramp down). Rate limits were raised for these runs so every request goes through the full booking path (Lua gate, row lock, transaction). The limits are still checked in Redis on every request.
 
 | Test | VUs | Requests | Booked (201) | Queued (202) | Seat taken (409) | 5xx | Doubles in DB | p99 latency | Throughput |
 |---|---|---|---|---|---|---|---|---|---|
-| Load | 100 | 44,695 | 50 | 44,455 | 137 | 0 | 0 | 27 ms | 1,004 req/s |
-| Stress | 500 | 158,927 | 50 | 158,703 | 120 | 0 | 0 | 134 ms | 3,564 req/s |
+| Load | 100 | 48,024 | 50 | 47,746 | 177 | 0 | 0 | 22 ms | 1,084 req/s |
+| Stress | 500 | 168,667 | 50 | 168,267 | 298 | 0 | 0 | 62 ms | 3,813 req/s |
+
+Laptop numbers vary between sessions (p99 at 500 VUs has ranged from about 60 to 135 ms with the same code), so only compare runs made back to back.
 
 Once all 50 seats are taken, the Redis counter hits 0 and every further request is put on the waitlist (202) without touching Postgres.
 
-**Event cache.** The booking path used to load the event from Postgres on every request (a join plus a count over all seats), even for requests that only end up on the waitlist. With 20 pool connections, requests queued up waiting for one. Event details are now cached in memory for 5 seconds, and the seat count still comes live from Redis. At 500 VUs this took throughput from 1,945 to 3,564 req/s and p99 from 191 ms to 134 ms.
+**Event cache.** The booking path used to load the event from Postgres on every request (a join plus a count over all seats), even for requests that only end up on the waitlist. With 20 pool connections, requests queued up waiting for one. Event details are now cached in memory for 5 seconds, and the seat count still comes live from Redis. At 500 VUs, measured back to back, this took throughput from 1,945 to 3,564 req/s and p99 from 191 ms to 134 ms.
+
+**Redis-backed rate limits.** Rate-limit counts are kept in Redis, so all server instances share one count per user and per IP, and counts survive restarts. With the old in-memory store, a user could make N times the limit across N instances. Against the in-memory store, back to back, it made no measurable difference (3,800 vs 3,627 req/s). If Redis goes down, the limiter lets requests through instead of blocking everyone.
 
 After every test, the database is checked directly for any seat with more than one active booking:
 
@@ -135,7 +139,8 @@ Express API (Node 20)
         +--> Postgres -- bookings, seats, events, audit log
         |
         +--> Redis ---- inventory counter, waitlist queue,
-        |               idempotency keys, reservation TTLs
+        |               idempotency keys, reservation TTLs,
+        |               rate-limit counts
         |
         +--> Socket.IO  seat-state broadcast via Redis Pub/Sub
 ```

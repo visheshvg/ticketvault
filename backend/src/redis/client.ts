@@ -34,6 +34,6 @@ export const KEYS = {
   waitingQueue:  (eventId: string) => `${PREFIX}waiting_queue:${eventId}`,
   reservation:   (bookingId: string) => `${PREFIX}reservation:${bookingId}`,
   idempotency:   (key: string) => `${PREFIX}idempotency:${key}`,
-  rateLimit:     (userId: string) => `${PREFIX}rate_limit:${userId}`,
+  rateLimit:     (limiter: string) => `${PREFIX}rate_limit:${limiter}:`,
   seatLock:      (seatId: string) => `${PREFIX}seat_lock:${seatId}`,
 };

@@ -21,6 +21,9 @@ import { config } from './config';
 const app = express();
 const httpServer = http.createServer(app);
 
+// Behind Render's proxy: use the client IP from X-Forwarded-For, not the proxy's
+if (config.env === 'production') app.set('trust proxy', 1);
+
 app.use(helmet());
 app.use(cors({ origin: process.env.FRONTEND_URL || 'http://localhost:5173', credentials: true }));
 app.use(compression());

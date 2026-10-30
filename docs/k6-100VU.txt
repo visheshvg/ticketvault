@@ -1,4 +1,4 @@
-EVENT_ID=1ce9f828-5705-43a2-b6f8-2617f895df9b
+EVENT_ID=b8d7380b-a864-4146-99fd-3b75a8a1d29f
 
          /\      Grafana   /‾‾/  
     /\  /  \     |\  __   /  /   
@@ -63,7 +63,7 @@ EVENT_ID=1ce9f828-5705-43a2-b6f8-2617f895df9b
   █ THRESHOLDS 
 
     http_req_duration
-    ✓ 'p(99)<2000' p(99)=27.23ms
+    ✓ 'p(99)<2000' p(99)=22.36ms
 
     http_req_failed
     ✓ 'rate<0.01' rate=0.00%
@@ -74,34 +74,34 @@ EVENT_ID=1ce9f828-5705-43a2-b6f8-2617f895df9b
 
   █ TOTAL RESULTS 
 
-    checks_total.......: 44644   1003.001886/s
-    checks_succeeded...: 100.00% 44644 out of 44644
-    checks_failed......: 0.00%   0 out of 44644
+    checks_total.......: 47973   1082.487778/s
+    checks_succeeded...: 100.00% 47973 out of 47973
+    checks_failed......: 0.00%   0 out of 47973
 
     ✓ no server error
 
     CUSTOM
-    booking_duration_ms............: avg=11.214407 min=1       med=11      max=83       p(90)=16      p(95)=19     
-    status_201_booked..............: 50    1.123333/s
-    status_202_queued..............: 44455 998.755686/s
-    status_409_seat_taken..........: 137   3.077933/s
+    booking_duration_ms............: avg=6.968607 min=1       med=6      max=43       p(90)=10      p(95)=12     
+    status_201_booked..............: 50    1.128226/s
+    status_202_queued..............: 47746 1077.365631/s
+    status_409_seat_taken..........: 177   3.99392/s
     status_5xx.....................: 0     0/s
 
     HTTP
-    http_req_duration..............: avg=11.4ms    min=1.06ms  med=11.01ms max=485.25ms p(90)=16.23ms p(95)=19.03ms
-      { expected_response:true }...: avg=11.4ms    min=1.06ms  med=11.01ms max=485.25ms p(90)=16.23ms p(95)=19.03ms
-    http_req_failed................: 0.00% 0 out of 44695
-    http_reqs......................: 44695 1004.147686/s
+    http_req_duration..............: avg=7.13ms   min=1.04ms  med=6.24ms max=227.92ms p(90)=9.48ms  p(95)=11.98ms
+      { expected_response:true }...: avg=7.13ms   min=1.04ms  med=6.24ms max=227.92ms p(90)=9.48ms  p(95)=11.98ms
+    http_req_failed................: 0.00% 0 out of 48024
+    http_reqs......................: 48024 1083.638568/s
 
     EXECUTION
-    iteration_duration.............: avg=61.6ms    min=51.77ms med=61.43ms max=133.2ms  p(90)=66.69ms p(95)=69.44ms
-    iterations.....................: 44644 1003.001886/s
-    vus............................: 12    min=0          max=100
+    iteration_duration.............: avg=57.33ms  min=51.37ms med=56.6ms max=92.6ms   p(90)=59.89ms p(95)=62.26ms
+    iterations.....................: 47973 1082.487778/s
+    vus............................: 7     min=0          max=100
     vus_max........................: 100   min=100        max=100
 
     NETWORK
-    data_received..................: 61 MB 1.4 MB/s
-    data_sent......................: 26 MB 573 kB/s
+    data_received..................: 66 MB 1.5 MB/s
+    data_sent......................: 27 MB 619 kB/s
 
 
 
