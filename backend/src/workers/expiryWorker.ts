@@ -45,13 +45,13 @@ export class ExpiryWorker {
     id: string; seat_id: string; event_id: string; user_id: string;
   }): Promise<void> {
     try {
-      await withTransaction(async (client) => {
+      const expired = await withTransaction(async (client) => {
         // Re-check status under lock to avoid racing with a concurrent payment webhook
         const check = await client.query(
           `SELECT status FROM bookings WHERE id = $1 FOR UPDATE`,
           [booking.id]
         );
-        if (!check.rows.length || check.rows[0].status !== 'pending') return;
+        if (!check.rows.length || check.rows[0].status !== 'pending') return false;
 
         await client.query(`UPDATE bookings SET status = 'expired' WHERE id = $1`, [booking.id]);
         await client.query(
@@ -63,7 +63,11 @@ export class ExpiryWorker {
            VALUES ($1, 'pending', 'expired', 'reservation_ttl_exceeded')`,
           [booking.id]
         );
+        return true;
       });
+
+      // Paid in the meantime, or another worker already expired it: the seat isn't ours to release
+      if (!expired) return;
 
       await bookingService.offerSeatToNextWaiter(booking.event_id, booking.seat_id);
 

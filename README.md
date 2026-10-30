@@ -58,7 +58,7 @@ A seat can have any number of expired or cancelled bookings, but only one active
 
 ### How it's tested
 
-The integration test in `tests/integration/bookingFlow.test.ts` fires 50 concurrent booking requests for the same seat. Exactly one becomes a booking. The other 49 are queued or fail cleanly. Another test inserts a second active booking straight into the table, bypassing the app, and checks that Postgres rejects it. These tests run on every push to GitHub.
+The integration test in `tests/integration/bookingFlow.test.ts` fires 50 concurrent booking requests for the same seat. Exactly one becomes a booking. The other 49 are queued or fail cleanly. Another test inserts a second active booking straight into the table, bypassing the app, and checks that Postgres rejects it. Two more cover expiry worker races: a payment that lands while the worker is expiring the booking, and two workers expiring the same booking. In both cases the seat must be released at most once. These tests run on every push to GitHub.
 
 ---
 
@@ -119,7 +119,7 @@ Full k6 output for both runs is in [`docs/k6-100VU.txt`](docs/k6-100VU.txt) and 
 - Simulated payment with success and failure paths; a failure releases the seat back to inventory
 - JWT auth with single-use refresh-token rotation (if a rotated token is reused, the client gets 401)
 - Admin dashboard with bookings, revenue, audit log, and live event occupancy
-- Background worker that releases stale reservations every 30 seconds
+- Background worker that releases stale reservations every 30 seconds. It re-checks the booking under a row lock, so a payment that arrives at the same moment wins
 
 ---
 
@@ -194,7 +194,7 @@ npx jest --testPathPattern="tests/integration"
 npx jest --testPathPattern="tests/e2e"
 ```
 
-All 27 tests pass against a freshly migrated database.
+All 29 tests pass against a freshly migrated database.
 
 ![Test suite output](docs/test-results.png)
 

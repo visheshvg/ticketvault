@@ -2,6 +2,7 @@ import { pool } from '../../src/db';
 import { redis, KEYS } from '../../src/redis/client';
 import { bookingService } from '../../src/services/booking/bookingService';
 import { eventService } from '../../src/services/event/eventService';
+import { expiryWorker } from '../../src/workers/expiryWorker';
 import { v4 as uuidv4 } from 'uuid';
 
 jest.mock('../../src/services/websocket/wsService', () => ({
@@ -23,7 +24,7 @@ beforeAll(async () => {
   const event = await eventService.createEvent({
     name: 'Integration Test Event',
     venue: 'Test Venue',
-    total_seats: 5,
+    total_seats: 7,
     base_price: 50,
     starts_at: new Date(Date.now() + 86400000).toISOString(),
     ends_at: new Date(Date.now() + 90000000).toISOString(),
@@ -143,6 +144,49 @@ describe('Booking flow — database guard', () => {
   it('allows inactive bookings alongside an active one', async () => {
     await expect(insertBooking(testSeatIds[0], 'expired')).resolves.toBeDefined();
     await expect(insertBooking(testSeatIds[0], 'cancelled')).resolves.toBeDefined();
+  });
+});
+
+describe('Expiry worker — races', () => {
+  const inventory = async () => parseInt(await redis.get(KEYS.seatInventory(testEventId)) ?? '0', 10);
+  const expire = (b: { id: string; seat_id: string; event_id: string; user_id: string }) =>
+    expiryWorker['_expireSingleBooking'](b);
+
+  // The concurrency test leaves users on the waitlist
+  beforeEach(() => redis.del(KEYS.waitingQueue(testEventId)));
+
+  it('does not release a seat that was paid for after the worker picked it up', async () => {
+    const seatId = testSeatIds[5];
+    const created = await bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: seatId }, `race-${uuidv4()}`);
+    await bookingService.confirmBooking(created.booking_id, 'pay_test');
+
+    const queueKey = KEYS.waitingQueue(testEventId);
+    await redis.lpush(queueKey, JSON.stringify({ userId: testUserId, seatId, timestamp: Date.now() }));
+    const inventoryBefore = await inventory();
+
+    // Worker saw the booking as pending in its scan, but payment landed first
+    await expire({ id: created.booking_id, seat_id: seatId, event_id: testEventId, user_id: testUserId });
+
+    expect(await inventory()).toBe(inventoryBefore);
+    expect(await redis.llen(queueKey)).toBe(1);
+    const booking = await pool.query(`SELECT status FROM bookings WHERE id = $1`, [created.booking_id]);
+    expect(booking.rows[0].status).toBe('confirmed');
+
+    await redis.del(queueKey);
+  });
+
+  it('releases a seat only once when two workers expire the same booking', async () => {
+    const seatId = testSeatIds[6];
+    const created = await bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: seatId }, `race-${uuidv4()}`);
+    const inventoryBefore = await inventory();
+
+    const booking = { id: created.booking_id, seat_id: seatId, event_id: testEventId, user_id: testUserId };
+    await expire(booking);
+    await expire(booking);
+
+    expect(await inventory()).toBe(inventoryBefore + 1);
+    const seat = await pool.query(`SELECT status FROM seats WHERE id = $1`, [seatId]);
+    expect(seat.rows[0].status).toBe('available');
   });
 });
 
