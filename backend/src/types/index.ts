@@ -94,6 +94,14 @@ export interface SeatStatusUpdate {
   section: string;
 }
 
+export interface WaitlistOffer {
+  booking_id: string;
+  event_id: string;
+  seat_number: string;
+  section: string;
+  expires_at: Date;
+}
+
 export interface MetricLabels {
   [key: string]: string | number;
 }

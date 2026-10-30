@@ -3,16 +3,20 @@ import { redis, KEYS } from '../../src/redis/client';
 import { bookingService } from '../../src/services/booking/bookingService';
 import { eventService } from '../../src/services/event/eventService';
 import { expiryWorker } from '../../src/workers/expiryWorker';
+import { inventoryReconciler } from '../../src/workers/inventoryReconciler';
+import { notifyWaitlistOffer } from '../../src/services/websocket/wsService';
 import { v4 as uuidv4 } from 'uuid';
 
 jest.mock('../../src/services/websocket/wsService', () => ({
   broadcastSeatUpdate: jest.fn(),
   broadcastInventoryUpdate: jest.fn(),
+  notifyWaitlistOffer: jest.fn(),
 }));
 
 let testEventId: string;
 let testSeatIds: string[];
 let testUserId: string;
+let otherUserId: string;
 
 beforeAll(async () => {
   testUserId = uuidv4();
@@ -20,11 +24,16 @@ beforeAll(async () => {
     `INSERT INTO users (id, email, password_hash, name) VALUES ($1, $2, $3, $4)`,
     [testUserId, `test-${testUserId}@test.com`, 'hashed', 'Test User']
   );
+  otherUserId = uuidv4();
+  await pool.query(
+    `INSERT INTO users (id, email, password_hash, name) VALUES ($1, $2, $3, $4)`,
+    [otherUserId, `test-${otherUserId}@test.com`, 'hashed', 'Other User']
+  );
 
   const event = await eventService.createEvent({
     name: 'Integration Test Event',
     venue: 'Test Venue',
-    total_seats: 7,
+    total_seats: 10,
     base_price: 50,
     starts_at: new Date(Date.now() + 86400000).toISOString(),
     ends_at: new Date(Date.now() + 90000000).toISOString(),
@@ -40,7 +49,7 @@ afterAll(async () => {
   await pool.query(`DELETE FROM bookings WHERE event_id = $1`, [testEventId]);
   await pool.query(`DELETE FROM seats WHERE event_id = $1`, [testEventId]);
   await pool.query(`DELETE FROM events WHERE id = $1`, [testEventId]);
-  await pool.query(`DELETE FROM users WHERE id = $1`, [testUserId]);
+  await pool.query(`DELETE FROM users WHERE id = ANY($1)`, [[testUserId, otherUserId]]);
   await redis.del(KEYS.seatInventory(testEventId));
   await redis.del(KEYS.waitingQueue(testEventId));
   await pool.end();
@@ -187,6 +196,76 @@ describe('Expiry worker — races', () => {
     expect(await inventory()).toBe(inventoryBefore + 1);
     const seat = await pool.query(`SELECT status FROM seats WHERE id = $1`, [seatId]);
     expect(seat.rows[0].status).toBe('available');
+  });
+});
+
+describe('Idempotency keys', () => {
+  it('are scoped per user: the same key from two users makes two bookings', async () => {
+    const key = `shared-${uuidv4()}`;
+    const a = await bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: testSeatIds[7] }, key);
+    const b = await bookingService.createBooking(otherUserId, { event_id: testEventId, seat_id: testSeatIds[8] }, key);
+
+    expect(a.status).toBe('pending');
+    expect(b.status).toBe('pending');
+    expect(b.booking_id).not.toBe(a.booking_id);
+    expect(b.seat.id).toBe(testSeatIds[8]);
+  });
+
+  it('rejects reusing a key for a different seat with 422', async () => {
+    const key = `reuse-${uuidv4()}`;
+    await bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: testSeatIds[9] }, key);
+
+    await expect(
+      bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: testSeatIds[4] }, key)
+    ).rejects.toMatchObject({ statusCode: 422 });
+  });
+
+  it('returns 409 instead of processing again when the first request never finishes', async () => {
+    const key = `stuck-${uuidv4()}`;
+    await redis.set(KEYS.idempotency(`${testUserId}:${key}`), 'PROCESSING', 'EX', 30);
+
+    await expect(
+      bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: testSeatIds[4] }, key)
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+describe('Inventory reconciler', () => {
+  it('fixes a drifted seat counter only after seeing the same drift twice', async () => {
+    const rows = await pool.query(
+      `SELECT COUNT(*) AS c FROM seats WHERE event_id = $1 AND status = 'available'`,
+      [testEventId]
+    );
+    const actual = parseInt(rows.rows[0].c, 10);
+    await redis.set(KEYS.seatInventory(testEventId), (actual + 5).toString());
+
+    await inventoryReconciler.reconcile();
+    expect(await redis.get(KEYS.seatInventory(testEventId))).toBe((actual + 5).toString());
+
+    await inventoryReconciler.reconcile();
+    expect(await redis.get(KEYS.seatInventory(testEventId))).toBe(actual.toString());
+  });
+});
+
+describe('Waitlist handoff', () => {
+  it('notifies the waiting user when a seat is reserved for them', async () => {
+    const queueKey = KEYS.waitingQueue(testEventId);
+    await redis.del(queueKey);
+
+    const created = await bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: testSeatIds[4] }, `handoff-${uuidv4()}`);
+    await redis.lpush(queueKey, JSON.stringify({ userId: otherUserId, seatId: testSeatIds[4], timestamp: Date.now() }));
+
+    await bookingService.cancelBooking(created.booking_id, testUserId);
+
+    expect(notifyWaitlistOffer).toHaveBeenCalledWith(
+      otherUserId,
+      expect.objectContaining({ event_id: testEventId, booking_id: expect.any(String) })
+    );
+    const offered = await pool.query(
+      `SELECT status FROM bookings WHERE user_id = $1 AND seat_id = $2 AND status = 'pending'`,
+      [otherUserId, testSeatIds[4]]
+    );
+    expect(offered.rows.length).toBe(1);
   });
 });
 

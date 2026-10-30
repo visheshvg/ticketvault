@@ -3,6 +3,10 @@ import { redis, KEYS } from '../redis/client';
 import { config } from '../config';
 import { workerLogger } from '../utils/logger';
 import { bookingService } from '../services/booking/bookingService';
+import { withLock } from '../redis/scripts';
+
+// Expires before the next 30 s run, so a crashed instance can't block the others
+const LOCK_TTL_SECONDS = 25;
 
 export class ExpiryWorker {
   private intervalId: ReturnType<typeof setInterval> | null = null;
@@ -23,19 +27,23 @@ export class ExpiryWorker {
 
   async processExpiredReservations(): Promise<void> {
     try {
-      const expired = await query<{ id: string; seat_id: string; event_id: string; user_id: string }>(
-        `SELECT id, seat_id, event_id, user_id FROM bookings
-         WHERE status = 'pending' AND expires_at < now()
-         LIMIT 100`
-      );
+      // Only one instance scans per interval; the others skip this run
+      const ran = await withLock(KEYS.workerLock('expiry'), LOCK_TTL_SECONDS, async () => {
+        const expired = await query<{ id: string; seat_id: string; event_id: string; user_id: string }>(
+          `SELECT id, seat_id, event_id, user_id FROM bookings
+           WHERE status = 'pending' AND expires_at < now()
+           LIMIT 100`
+        );
 
-      if (!expired.length) return;
+        if (!expired.length) return;
 
-      workerLogger.info('Processing expired reservations', { count: expired.length });
+        workerLogger.info('Processing expired reservations', { count: expired.length });
 
-      for (const booking of expired) {
-        await this._expireSingleBooking(booking);
-      }
+        for (const booking of expired) {
+          await this._expireSingleBooking(booking);
+        }
+      });
+      if (!ran) workerLogger.debug('Expiry run skipped, another instance holds the lock');
     } catch (err) {
       workerLogger.error('Expiry worker scan failed', { error: (err as Error).message });
     }

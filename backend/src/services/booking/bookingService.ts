@@ -8,7 +8,7 @@ import { Booking, BookingResponse, CreateBookingRequest, Seat } from '../../type
 import { bookingLogger } from '../../utils/logger';
 import { HttpError } from '../../utils/httpErrors';
 import { eventService } from '../event/eventService';
-import { broadcastSeatUpdate, broadcastInventoryUpdate } from '../websocket/wsService';
+import { broadcastSeatUpdate, broadcastInventoryUpdate, notifyWaitlistOffer } from '../websocket/wsService';
 
 const IDEMPOTENCY_PROCESSING_TTL = 30;
 
@@ -19,17 +19,25 @@ export class BookingService {
     data: CreateBookingRequest,
     idempotencyKey: string
   ): Promise<BookingResponse> {
-    const idemKey = KEYS.idempotency(idempotencyKey);
+    // Scoped per user, so two users sending the same key never see each other's response
+    const scopedKey = `${userId}:${idempotencyKey}`;
+    const idemKey = KEYS.idempotency(scopedKey);
 
     const claimed = await claimIdempotencyKey(idemKey, IDEMPOTENCY_PROCESSING_TTL);
     if (!claimed) {
       const cached = await this._waitForIdempotentResponse(idemKey);
-      if (cached) return cached;
+      if (cached.seat.id !== data.seat_id) {
+        throw new HttpError(422, 'Idempotency-Key was already used for a different seat');
+      }
+      return cached;
     }
 
     const event = await eventService.getEventCached(data.event_id);
-    if (!event) throw new HttpError(404, 'Event not found');
-    if (event.status !== 'published') throw new HttpError(422, 'Event is not accepting bookings');
+    if (!event || event.status !== 'published') {
+      await redis.del(idemKey);
+      if (!event) throw new HttpError(404, 'Event not found');
+      throw new HttpError(422, 'Event is not accepting bookings');
+    }
 
     const amount = eventService.calculatePrice(event.base_price, event.available_seats, event.total_seats);
     const inventoryKey = KEYS.seatInventory(data.event_id);
@@ -65,7 +73,7 @@ export class BookingService {
 
     try {
       response = await withTransaction(async (client) => {
-        return this._createBookingInTransaction(client, userId, data, idempotencyKey, amount);
+        return this._createBookingInTransaction(client, userId, data, scopedKey, amount);
       });
     } catch (err) {
       await redis.incr(inventoryKey);
@@ -94,17 +102,20 @@ export class BookingService {
     return response;
   }
 
-  private async _waitForIdempotentResponse(idemKey: string): Promise<BookingResponse | null> {
+  private async _waitForIdempotentResponse(idemKey: string): Promise<BookingResponse> {
     const maxWaitMs = 10_000;
     const pollIntervalMs = 200;
     const start = Date.now();
     while (Date.now() - start < maxWaitMs) {
-      await new Promise((r) => setTimeout(r, pollIntervalMs));
       const value = await redis.get(idemKey);
-      if (value && value !== 'PROCESSING') return JSON.parse(value);
+      // Key gone means the first request failed, so this one can safely retry
+      if (value === null) break;
+      if (value !== 'PROCESSING') return JSON.parse(value);
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
     }
-    bookingLogger.warn('Idempotency key still PROCESSING after timeout', { key: idemKey });
-    return null;
+    // Never process the same key twice at once
+    bookingLogger.warn('Idempotent request not finished, asking client to retry', { key: idemKey });
+    throw new HttpError(409, 'A request with this Idempotency-Key is still processing, please retry');
   }
 
   private async _createBookingInTransaction(
@@ -299,6 +310,13 @@ export class BookingService {
       );
 
       broadcastSeatUpdate({ event_id: eventId, seat_id: seatId, status: 'reserved', seat_number: seatNumber, section });
+      notifyWaitlistOffer(waiter.userId, {
+        booking_id: response.booking_id,
+        event_id: eventId,
+        seat_number: seatNumber,
+        section,
+        expires_at: response.expires_at!,
+      });
     } catch (err) {
       bookingLogger.warn('Failed to reserve for waiter, releasing seat', { user_id: waiter.userId, error: (err as Error).message });
       await redis.incr(KEYS.seatInventory(eventId));

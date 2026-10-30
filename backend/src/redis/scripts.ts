@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { redis } from './client';
 
 const DECR_IF_POSITIVE = `
@@ -63,4 +64,16 @@ export async function acquireLock(lockKey: string, value: string, ttlSeconds: nu
 
 export async function releaseLock(lockKey: string, value: string): Promise<void> {
   await redis.eval(RELEASE_LOCK, 1, lockKey, value);
+}
+
+// Runs fn only if this instance gets the lock. Returns false if another instance holds it.
+export async function withLock(lockKey: string, ttlSeconds: number, fn: () => Promise<void>): Promise<boolean> {
+  const owner = randomUUID();
+  if (!(await acquireLock(lockKey, owner, ttlSeconds))) return false;
+  try {
+    await fn();
+  } finally {
+    await releaseLock(lockKey, owner);
+  }
+  return true;
 }

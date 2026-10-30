@@ -5,7 +5,7 @@ import { redis } from '../../redis/client';
 import { logger } from '../../utils/logger';
 import jwt from 'jsonwebtoken';
 import { config } from '../../config';
-import { AuthPayload, SeatStatusUpdate } from '../../types';
+import { AuthPayload, SeatStatusUpdate, WaitlistOffer } from '../../types';
 
 let io: SocketServer | null = null;
 
@@ -36,6 +36,10 @@ export function initWebSocketServer(httpServer: HttpServer): SocketServer {
 
   io.on('connection', (socket: Socket) => {
     logger.debug('WebSocket connected', { socket_id: socket.id });
+
+    // Personal room for messages meant only for this user
+    const user = (socket as Socket & { user?: AuthPayload }).user;
+    if (user) socket.join(`user:${user.user_id}`);
 
     socket.on('subscribe:event', (eventId: string) => {
       socket.join(`event:${eventId}`);
@@ -70,4 +74,9 @@ export function broadcastSeatUpdate(update: SeatStatusUpdate): void {
 export function broadcastInventoryUpdate(eventId: string, remaining: number, currentPrice: number): void {
   if (!io) return;
   io.to(`event:${eventId}`).emit('inventory:updated', { eventId, remaining, currentPrice });
+}
+
+export function notifyWaitlistOffer(userId: string, offer: WaitlistOffer): void {
+  if (!io) return;
+  io.to(`user:${userId}`).emit('waitlist:offered', offer);
 }

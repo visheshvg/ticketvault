@@ -1,6 +1,12 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+function jwtSecret(): string {
+  if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === 'test') return 'test-secret';
+  throw new Error('JWT_SECRET is not set');
+}
+
 export const config = {
   env: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT || '3000', 10),
@@ -23,7 +29,7 @@ export const config = {
   },
 
   jwt: {
-    secret: process.env.JWT_SECRET || 'change-me-in-production',
+    secret: jwtSecret(),
     expiresIn: '24h',
   },
 

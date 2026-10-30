@@ -36,4 +36,6 @@ export const KEYS = {
   idempotency:   (key: string) => `${PREFIX}idempotency:${key}`,
   rateLimit:     (limiter: string) => `${PREFIX}rate_limit:${limiter}:`,
   seatLock:      (seatId: string) => `${PREFIX}seat_lock:${seatId}`,
+  workerLock:    (worker: string) => `${PREFIX}worker_lock:${worker}`,
+  inventoryMismatch: (eventId: string) => `${PREFIX}inventory_mismatch:${eventId}`,
 };

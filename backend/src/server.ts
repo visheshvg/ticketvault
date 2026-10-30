@@ -8,6 +8,7 @@ import { globalRateLimit } from './middleware/rateLimiter';
 import { requestLogger, errorHandler } from './middleware/requestLogger';
 import { logger } from './utils/logger';
 import { expiryWorker } from './workers/expiryWorker';
+import { inventoryReconciler } from './workers/inventoryReconciler';
 import { initWebSocketServer, closeWebSocketServer } from './services/websocket/wsService';
 import { pool } from './db';
 import { redis } from './redis/client';
@@ -47,6 +48,7 @@ async function start() {
   initWebSocketServer(httpServer);
 
   expiryWorker.start();
+  inventoryReconciler.start();
 
   httpServer.listen(config.port, () => {
     logger.info('TicketVault backend running', { port: config.port, env: config.env });
@@ -62,6 +64,7 @@ async function shutdown(signal: string) {
   }, 10_000).unref();
 
   expiryWorker.stop();
+  inventoryReconciler.stop();
 
   // io.close() disconnects all sockets and also closes the underlying HTTP server
   await closeWebSocketServer();

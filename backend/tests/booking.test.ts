@@ -1,6 +1,6 @@
 import { pool } from '../src/db';
 import { redis, KEYS } from '../src/redis/client';
-import { atomicDecrement, releaseAndNotify, claimIdempotencyKey } from '../src/redis/scripts';
+import { atomicDecrement, releaseAndNotify, claimIdempotencyKey, withLock } from '../src/redis/scripts';
 
 afterAll(async () => {
   await pool.end();
@@ -112,6 +112,28 @@ describe('claimIdempotencyKey', () => {
     await new Promise((r) => setTimeout(r, 1200));
     expect(await claimIdempotencyKey(key, 30)).toBe(true);
     await redis.del(key);
+  });
+});
+
+describe('withLock', () => {
+  it('runs the job on only one of two concurrent instances', async () => {
+    const key = k('lock');
+    let runs = 0;
+    const job = async () => {
+      runs++;
+      await new Promise((r) => setTimeout(r, 100));
+    };
+
+    const results = await Promise.all([withLock(key, 5, job), withLock(key, 5, job)]);
+
+    expect(runs).toBe(1);
+    expect(results.sort()).toEqual([false, true]);
+  });
+
+  it('releases the lock when the job finishes', async () => {
+    const key = k('lock-release');
+    await withLock(key, 5, async () => {});
+    expect(await withLock(key, 5, async () => {})).toBe(true);
   });
 });
 

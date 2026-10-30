@@ -117,13 +117,14 @@ Full k6 output for both runs is in [`docs/k6-100VU.txt`](docs/k6-100VU.txt) and 
 
 - Browse events with a live seat map
 - Reserve a seat with a 10-minute hold and visible countdown
-- `Idempotency-Key` header on the booking endpoint so client retries never create duplicate bookings
-- Waitlist queue when an event is sold out, with position tracking
+- `Idempotency-Key` header on the booking endpoint so client retries never create duplicate bookings. Keys are scoped per user, reusing a key for a different seat returns 422, and a retry that arrives while the first request is still running gets 409 instead of being processed twice
+- Waitlist queue when an event is sold out, with position tracking. When a seat frees up, it's reserved for the next person in line and they get a live alert with a "Pay now" button
 - Real-time seat availability updates over WebSocket
 - Simulated payment with success and failure paths; a failure releases the seat back to inventory
-- JWT auth with single-use refresh-token rotation (if a rotated token is reused, the client gets 401)
+- JWT auth with single-use refresh-token rotation (if a rotated token is reused, the client gets 401). The server refuses to start without `JWT_SECRET`
 - Admin dashboard with bookings, revenue, audit log, and live event occupancy
-- Background worker that releases stale reservations every 30 seconds. It re-checks the booking under a row lock, so a payment that arrives at the same moment wins
+- Background worker that releases stale reservations every 30 seconds. It re-checks the booking under a row lock, so a payment that arrives at the same moment wins. A Redis lock makes sure only one server instance runs it at a time
+- Reconciliation job that checks the Redis seat counters against Postgres every 5 minutes and fixes any drift (for example after a crash between the Redis decrement and the Postgres commit). It only fixes a mismatch that is still there on the next run, so a booking in flight never triggers a false fix
 
 ---
 
@@ -199,7 +200,7 @@ npx jest --testPathPattern="tests/integration"
 npx jest --testPathPattern="tests/e2e"
 ```
 
-All 29 tests pass against a freshly migrated database.
+All 36 tests pass against a freshly migrated database.
 
 ![Test suite output](docs/test-results.png)
 
@@ -239,7 +240,7 @@ ticketvault/
 │   │   │   ├── payment/          Simulated pay, success/fail handling
 │   │   │   ├── event/            CRUD, surge pricing, seat-map generation
 │   │   │   └── websocket/        Socket.IO with Redis adapter
-│   │   ├── workers/expiryWorker  Background reservation expiry
+│   │   ├── workers/              Reservation expiry, seat counter reconciliation
 │   │   ├── middleware/           auth, rate limit, refresh-token rotation
 │   │   ├── redis/                ioredis client and 5 Lua scripts
 │   │   └── db/                   Schema, migration, seed
