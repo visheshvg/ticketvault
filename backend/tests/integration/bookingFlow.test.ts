@@ -123,6 +123,29 @@ describe('Booking flow — concurrency: no double-booking', () => {
   });
 });
 
+describe('Booking flow — database guard', () => {
+  const insertBooking = (seatId: string, status: string) =>
+    pool.query(
+      `INSERT INTO bookings (user_id, seat_id, event_id, status, idempotency_key, expires_at)
+       VALUES ($1, $2, $3, $4, $5, now() + interval '10 minutes')`,
+      [testUserId, seatId, testEventId, status, `guard-${uuidv4()}`]
+    );
+
+  it('rejects a second active booking for the same seat, even bypassing app code', async () => {
+    // testSeatIds[0] already has a pending booking from the happy path test
+    await expect(insertBooking(testSeatIds[0], 'pending')).rejects.toMatchObject({
+      code: '23505',
+      constraint: 'uniq_active_booking_per_seat',
+    });
+    await expect(insertBooking(testSeatIds[0], 'confirmed')).rejects.toMatchObject({ code: '23505' });
+  });
+
+  it('allows inactive bookings alongside an active one', async () => {
+    await expect(insertBooking(testSeatIds[0], 'expired')).resolves.toBeDefined();
+    await expect(insertBooking(testSeatIds[0], 'cancelled')).resolves.toBeDefined();
+  });
+});
+
 describe('Booking flow — waitlist', () => {
   it('queues user when sold out', async () => {
     await redis.set(KEYS.seatInventory(testEventId), '0');

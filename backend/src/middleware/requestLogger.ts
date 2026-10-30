@@ -30,6 +30,15 @@ export function errorHandler(err: Error & { code?: string }, req: Request, res: 
     return;
   }
 
+  // Unique constraint violation, e.g. a second active booking for the same seat
+  if (err.code === '23505') {
+    const constraint = (err as Error & { constraint?: string }).constraint;
+    res.status(409).json({
+      error: constraint === 'uniq_active_booking_per_seat' ? 'Seat is already booked' : 'Duplicate request',
+    });
+    return;
+  }
+
   const aggregateErrors = (err as Error & { errors?: Error[] }).errors;
   logger.error('Unhandled error', {
     error: err.message || '(empty)',

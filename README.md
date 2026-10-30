@@ -18,7 +18,7 @@ The core engineering challenge: when 500 virtual users (k6) hit 'reserve' on the
 
 ## How double-booking is prevented
 
-When the same seat is requested by many users at once, three things stack on top of each other to make sure only one booking happens:
+When the same seat is requested by many users at once, four things stack on top of each other to make sure only one booking happens:
 
 ### 1. Redis Lua atomic decrement
 
@@ -45,9 +45,20 @@ The error handler catches the lock-failed error and returns HTTP 423 so the clie
 
 Even with the lock acquired, the seat status is checked one more time before the booking is written. Just an extra check in case some other code path changed the seat in between.
 
+### 4. Partial unique index
+
+The first three layers live in application code. The last one is in the database itself, so a double booking is impossible even if the code has a bug:
+
+```sql
+CREATE UNIQUE INDEX uniq_active_booking_per_seat
+  ON bookings(seat_id) WHERE status IN ('pending','confirmed');
+```
+
+A seat can have any number of expired or cancelled bookings, but only one active one. If an insert breaks this rule, Postgres rejects it and the API returns 409.
+
 ### How it's tested
 
-The integration test in `tests/integration/bookingFlow.test.ts` fires 50 concurrent booking requests for the same seat. Exactly one becomes a booking. The other 49 are queued or fail cleanly. This test runs on every push to GitHub.
+The integration test in `tests/integration/bookingFlow.test.ts` fires 50 concurrent booking requests for the same seat. Exactly one becomes a booking. The other 49 are queued or fail cleanly. Another test inserts a second active booking straight into the table, bypassing the app, and checks that Postgres rejects it. These tests run on every push to GitHub.
 
 ---
 
@@ -183,7 +194,7 @@ npx jest --testPathPattern="tests/integration"
 npx jest --testPathPattern="tests/e2e"
 ```
 
-All 25 tests pass against a freshly migrated database.
+All 27 tests pass against a freshly migrated database.
 
 ![Test suite output](docs/test-results.png)
 

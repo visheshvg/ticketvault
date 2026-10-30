@@ -94,6 +94,10 @@ CREATE INDEX IF NOT EXISTS idx_seats_event_status  ON seats(event_id, status);
 CREATE INDEX IF NOT EXISTS idx_audit_booking       ON booking_audit_log(booking_id);
 CREATE INDEX IF NOT EXISTS idx_audit_changed       ON booking_audit_log(changed_at);
 CREATE INDEX IF NOT EXISTS idx_refresh_user        ON refresh_tokens(user_id);
+
+-- At most one active booking per seat, enforced by the database itself
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_booking_per_seat
+  ON bookings(seat_id) WHERE status IN ('pending','confirmed');
 `;
 
 async function migrate() {
