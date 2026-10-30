@@ -57,10 +57,12 @@ Tested with k6 against the production build of the backend, running locally on a
 
 | Test | VUs | Requests | Booked (201) | Queued (202) | Seat taken (409) | 5xx | Doubles in DB | p99 latency | Throughput |
 |---|---|---|---|---|---|---|---|---|---|
-| Load | 100 | 43,231 | 50 | 42,981 | 148 | 0 | 0 | 33 ms | 952 req/s |
-| Stress | 500 | 89,026 | 50 | 88,726 | 195 | 0 | 0 | 191 ms | 1,945 req/s |
+| Load | 100 | 44,695 | 50 | 44,455 | 137 | 0 | 0 | 27 ms | 1,004 req/s |
+| Stress | 500 | 158,927 | 50 | 158,703 | 120 | 0 | 0 | 134 ms | 3,564 req/s |
 
 Once all 50 seats are taken, the Redis counter hits 0 and every further request is put on the waitlist (202) without touching Postgres.
+
+**Event cache.** The booking path used to load the event from Postgres on every request (a join plus a count over all seats), even for requests that only end up on the waitlist. With 20 pool connections, requests queued up waiting for one. Event details are now cached in memory for 5 seconds, and the seat count still comes live from Redis. At 500 VUs this took throughput from 1,945 to 3,564 req/s and p99 from 191 ms to 134 ms.
 
 After every test, the database is checked directly for any seat with more than one active booking:
 

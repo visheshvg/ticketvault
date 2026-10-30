@@ -1,4 +1,4 @@
-EVENT_ID=a5c39ab2-fa90-4e9a-a841-3bebdcf4635f
+EVENT_ID=e00fcbce-9588-42a4-a137-a7cf92b17766
 
          /\      Grafana   /‾‾/  
     /\  /  \     |\  __   /  /   
@@ -60,11 +60,10 @@ EVENT_ID=a5c39ab2-fa90-4e9a-a841-3bebdcf4635f
 
 
 
-
   █ THRESHOLDS 
 
     http_req_duration
-    ✓ 'p(99)<2000' p(99)=190.55ms
+    ✓ 'p(99)<2000' p(99)=134.38ms
 
     http_req_failed
     ✓ 'rate<0.01' rate=0.00%
@@ -75,34 +74,34 @@ EVENT_ID=a5c39ab2-fa90-4e9a-a841-3bebdcf4635f
 
   █ TOTAL RESULTS 
 
-    checks_total.......: 88975   1943.892292/s
-    checks_succeeded...: 100.00% 88975 out of 88975
-    checks_failed......: 0.00%   0 out of 88975
+    checks_total.......: 158876  3562.394824/s
+    checks_succeeded...: 100.00% 158876 out of 158876
+    checks_failed......: 0.00%   0 out of 158876
 
     ✓ no server error
 
     CUSTOM
-    booking_duration_ms............: avg=104.470334 min=2       med=116      max=227      p(90)=144      p(95)=158     
-    status_201_booked..............: 50     1.092381/s
-    status_202_queued..............: 88726  1938.452234/s
-    status_409_seat_taken..........: 195    4.260287/s
+    booking_duration_ms............: avg=36.251347 min=2       med=35      max=285      p(90)=52       p(95)=61      
+    status_201_booked..............: 50     1.121124/s
+    status_202_queued..............: 158703 3558.515734/s
+    status_409_seat_taken..........: 120    2.690698/s
     status_5xx.....................: 0      0/s
 
     HTTP
-    http_req_duration..............: avg=104.51ms   min=1.27ms  med=115.78ms max=525.14ms p(90)=144.32ms p(95)=158.46ms
-      { expected_response:true }...: avg=104.51ms   min=1.27ms  med=115.78ms max=525.14ms p(90)=144.32ms p(95)=158.46ms
-    http_req_failed................: 0.00%  0 out of 89026
-    http_reqs......................: 89026  1945.006521/s
+    http_req_duration..............: avg=36.28ms   min=1.03ms  med=35.12ms max=284.82ms p(90)=51.58ms  p(95)=61.38ms 
+      { expected_response:true }...: avg=36.28ms   min=1.03ms  med=35.12ms max=284.82ms p(90)=51.58ms  p(95)=61.38ms 
+    http_req_failed................: 0.00%  0 out of 158927
+    http_reqs......................: 158927 3563.538371/s
 
     EXECUTION
-    iteration_duration.............: avg=154.84ms   min=52.31ms med=166.15ms max=277.71ms p(90)=194.49ms p(95)=208.66ms
-    iterations.....................: 88975  1943.892292/s
-    vus............................: 83     min=0          max=500
-    vus_max........................: 500    min=500        max=500
+    iteration_duration.............: avg=86.64ms   min=51.59ms med=85.5ms  max=337.44ms p(90)=101.87ms p(95)=111.75ms
+    iterations.....................: 158876 3562.394824/s
+    vus............................: 63     min=0           max=500
+    vus_max........................: 500    min=500         max=500
 
     NETWORK
-    data_received..................: 122 MB 2.7 MB/s
-    data_sent......................: 51 MB  1.1 MB/s
+    data_received..................: 217 MB 4.9 MB/s
+    data_sent......................: 91 MB  2.0 MB/s
 
 
 

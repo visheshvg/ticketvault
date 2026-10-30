@@ -27,7 +27,7 @@ export class BookingService {
       if (cached) return cached;
     }
 
-    const event = await eventService.getEventById(data.event_id);
+    const event = await eventService.getEventCached(data.event_id);
     if (!event) throw new HttpError(404, 'Event not found');
     if (event.status !== 'published') throw new HttpError(422, 'Event is not accepting bookings');
 
@@ -282,7 +282,7 @@ export class BookingService {
     const waiter = JSON.parse(released) as { userId: string; seatId: string; timestamp: number };
 
     try {
-      const event = await eventService.getEventById(eventId);
+      const event = await eventService.getEventCached(eventId);
       const amount = event
         ? eventService.calculatePrice(event.base_price, event.available_seats, event.total_seats)
         : 0;

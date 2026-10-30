@@ -15,7 +15,11 @@ interface CreateEventInput {
   ends_at: string;
 }
 
+const EVENT_CACHE_TTL_MS = 5_000;
+
 export class EventService {
+  private eventCache = new Map<string, { event: Event; expiresAt: number }>();
+
   async getEvents(): Promise<Event[]> {
     // available_seats is always computed live from seats table — not stored on events
     return query<Event>(`
@@ -40,10 +44,27 @@ export class EventService {
     `, [eventId]);
 
     if (!rows.length) return null;
-    const event = rows[0];
+    return this.withLiveInventory(rows[0]);
+  }
 
+  // Booking hot path: skips the Postgres query for a few seconds per event.
+  // Only the seat count changes under load, and that comes from Redis anyway.
+  async getEventCached(eventId: string): Promise<Event | null> {
+    const hit = this.eventCache.get(eventId);
+    if (hit && hit.expiresAt > Date.now()) {
+      return this.withLiveInventory({ ...hit.event });
+    }
+
+    const event = await this.getEventById(eventId);
+    if (event) {
+      this.eventCache.set(eventId, { event: { ...event }, expiresAt: Date.now() + EVENT_CACHE_TTL_MS });
+    }
+    return event;
+  }
+
+  private async withLiveInventory(event: Event): Promise<Event> {
     // Redis overrides the DB count for the hot path (fresher under high load)
-    const redisCount = await redis.get(KEYS.seatInventory(eventId));
+    const redisCount = await redis.get(KEYS.seatInventory(event.id));
     if (redisCount !== null) {
       event.available_seats = parseInt(redisCount, 10);
     }
