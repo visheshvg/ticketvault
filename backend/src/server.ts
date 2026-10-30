@@ -8,7 +8,9 @@ import { globalRateLimit } from './middleware/rateLimiter';
 import { requestLogger, errorHandler } from './middleware/requestLogger';
 import { logger } from './utils/logger';
 import { expiryWorker } from './workers/expiryWorker';
-import { initWebSocketServer } from './services/websocket/wsService';
+import { initWebSocketServer, closeWebSocketServer } from './services/websocket/wsService';
+import { pool } from './db';
+import { redis } from './redis/client';
 import authRoutes from './routes/auth';
 import eventRoutes from './routes/events';
 import bookingRoutes from './routes/bookings';
@@ -51,21 +53,36 @@ async function start() {
 async function shutdown(signal: string) {
   logger.info(`${signal} received — shutting down gracefully`);
 
-  expiryWorker.stop();
-
-  httpServer.close(() => {
-    logger.info('HTTP server closed');
-    process.exit(0);
-  });
-
   setTimeout(() => {
     logger.warn('Forced shutdown after timeout');
     process.exit(1);
   }, 10_000).unref();
+
+  expiryWorker.stop();
+
+  // io.close() disconnects all sockets and also closes the underlying HTTP server
+  await closeWebSocketServer();
+  httpServer.closeAllConnections();
+  logger.info('HTTP server closed');
+
+  await Promise.allSettled([pool.end(), redis.quit()]);
+  process.exit(0);
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT',  () => shutdown('SIGINT'));
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection', {
+    error: reason instanceof Error ? reason.message : String(reason),
+    stack: reason instanceof Error ? reason.stack : undefined,
+  });
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception', { error: err.message, stack: err.stack });
+  process.exit(1);
+});
 
 start().catch((err) => {
   logger.error('Fatal startup error', { error: err });
