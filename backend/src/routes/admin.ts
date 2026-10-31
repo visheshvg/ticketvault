@@ -62,7 +62,7 @@ router.get('/audit/:bookingId', async (req: Request, res: Response) => {
 router.get('/queue/:eventId', async (req: Request, res: Response) => {
   const { eventId } = req.params;
   const [queueDepth, inventory] = await Promise.all([
-    redis.llen(KEYS.waitingQueue(eventId)),
+    redis.zcard(KEYS.waitingQueue(eventId)),
     redis.get(KEYS.seatInventory(eventId)),
   ]);
   res.json({

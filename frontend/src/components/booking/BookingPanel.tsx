@@ -34,7 +34,7 @@ export function BookingPanel({ eventId, seat, basePrice, currentPrice, onDeselec
       if (result.status === 'queued') {
         setQueued(true);
         toast.success('Added to waitlist', {
-          description: `You're #${result.queue_position} in line. Stay on this page to get an alert if a seat frees up.`,
+          description: `You're #${result.queue_position} in line. Keep this page open to get your turn when a seat frees up.`,
         });
       } else {
         toast.success('Seat reserved!', { description: '10 minutes to complete payment.' });
@@ -66,9 +66,9 @@ export function BookingPanel({ eventId, seat, basePrice, currentPrice, onDeselec
             <div className="queued-icon"><Bell size={22} /></div>
             <p className="queued-title">You're in the queue!</p>
             <p className="queued-desc">
-              All seats are currently held. If one frees up, it's reserved for you automatically
-              and you'll get an alert on this page. It also shows in My Bookings. Pay within
-              10 minutes to keep it.
+              All seats are currently held. Keep this page open: when a seat frees up, it's
+              offered to people in line one at a time and held for a couple of minutes. If it's
+              your turn, you'll get an alert. If nobody takes it, it goes back on sale for everyone.
             </p>
             <button
               className="btn btn-secondary btn-sm"

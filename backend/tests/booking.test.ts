@@ -1,6 +1,6 @@
 import { pool } from '../src/db';
 import { redis, KEYS } from '../src/redis/client';
-import { atomicDecrement, releaseAndNotify, claimIdempotencyKey, withLock } from '../src/redis/scripts';
+import { atomicDecrement, releaseAndNotify, claimIdempotencyKey, withLock, joinWaitlist } from '../src/redis/scripts';
 
 afterAll(async () => {
   await pool.end();
@@ -54,17 +54,19 @@ describe('atomicDecrement', () => {
 });
 
 describe('releaseAndNotify', () => {
-  it('pops the next waiter without incrementing inventory (seat stays taken)', async () => {
+  it('pops the longest-waiting user without incrementing inventory (seat stays taken)', async () => {
     const invKey   = k('inv');
     const queueKey = k('queue');
     await redis.set(invKey, '0');
-    await redis.lpush(queueKey, JSON.stringify({ userId: 'user-abc', timestamp: Date.now() }));
+    await joinWaitlist(queueKey, 'user-first');
+    await new Promise((r) => setTimeout(r, 5));
+    await joinWaitlist(queueKey, 'user-second');
 
     const popped = await releaseAndNotify(invKey, queueKey);
 
     expect(await redis.get(invKey)).toBe('0');
-    expect(popped).not.toBeNull();
-    expect(JSON.parse(popped!).userId).toBe('user-abc');
+    expect(popped?.userId).toBe('user-first');
+    expect(await redis.zcard(queueKey)).toBe(1);
 
     await redis.del(invKey, queueKey);
   });
@@ -79,6 +81,20 @@ describe('releaseAndNotify', () => {
     expect(popped).toBeNull();
     expect(await redis.get(invKey)).toBe('1');
     await redis.del(invKey);
+  });
+});
+
+describe('joinWaitlist', () => {
+  it('adds each user once and keeps their original place when they join again', async () => {
+    const queueKey = k('join');
+    expect(await joinWaitlist(queueKey, 'user-a')).toBe(1);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(await joinWaitlist(queueKey, 'user-b')).toBe(2);
+    await new Promise((r) => setTimeout(r, 5));
+
+    expect(await joinWaitlist(queueKey, 'user-a')).toBe(1);
+    expect(await redis.zcard(queueKey)).toBe(2);
+    await redis.del(queueKey);
   });
 });
 
@@ -140,7 +156,7 @@ describe('withLock', () => {
 describe('KEYS prefix format', () => {
   it('produces correctly prefixed keys', () => {
     expect(KEYS.seatInventory('evt-1')).toBe('tv:seat_inventory:evt-1');
-    expect(KEYS.waitingQueue('evt-1')).toBe('tv:waiting_queue:evt-1');
+    expect(KEYS.waitingQueue('evt-1')).toBe('tv:waitlist:evt-1');
     expect(KEYS.idempotency('abc')).toBe('tv:idempotency:abc');
     expect(KEYS.reservation('bk-1')).toBe('tv:reservation:bk-1');
   });

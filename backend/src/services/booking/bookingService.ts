@@ -2,15 +2,18 @@ import { PoolClient } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 import { withTransaction, query } from '../../db';
 import { redis, KEYS } from '../../redis/client';
-import { atomicDecrement, releaseAndNotify, claimIdempotencyKey } from '../../redis/scripts';
+import { atomicDecrement, releaseAndNotify, claimIdempotencyKey, joinWaitlist } from '../../redis/scripts';
 import { config } from '../../config';
 import { Booking, BookingResponse, CreateBookingRequest, Seat } from '../../types';
 import { bookingLogger } from '../../utils/logger';
 import { HttpError } from '../../utils/httpErrors';
 import { eventService } from '../event/eventService';
-import { broadcastSeatUpdate, broadcastInventoryUpdate, notifyWaitlistOffer } from '../websocket/wsService';
+import {
+  broadcastSeatUpdate, broadcastInventoryUpdate, notifyWaitlistOffer, notifySeatAvailable, isUserOnline,
+} from '../websocket/wsService';
 
 const IDEMPOTENCY_PROCESSING_TTL = 30;
+const MAX_OFFLINE_SKIPS = 20;
 
 export class BookingService {
 
@@ -45,11 +48,7 @@ export class BookingService {
     const remaining = await atomicDecrement(inventoryKey);
 
     if (remaining === -1) {
-      const queueKey = KEYS.waitingQueue(data.event_id);
-      const position = await redis.lpush(
-        queueKey,
-        JSON.stringify({ userId, seatId: data.seat_id, timestamp: Date.now() })
-      );
+      const position = await joinWaitlist(KEYS.waitingQueue(data.event_id), userId);
 
       const response: BookingResponse = {
         booking_id: '',
@@ -89,6 +88,8 @@ export class BookingService {
     );
 
     await redis.setex(idemKey, config.reservation.idempotencyTtlSeconds, JSON.stringify(response));
+    // Got a seat, so they no longer need a spot in the waitlist
+    await redis.zrem(KEYS.waitingQueue(data.event_id), userId);
 
     broadcastSeatUpdate({
       event_id: data.event_id,
@@ -123,7 +124,8 @@ export class BookingService {
     userId: string,
     data: CreateBookingRequest,
     idempotencyKey: string,
-    amount: number
+    amount: number,
+    holdSeconds: number = config.reservation.ttlSeconds
   ): Promise<BookingResponse> {
     const seatRows = await client.query<Seat>(
       `SELECT * FROM seats WHERE id = $1 FOR UPDATE NOWAIT`,
@@ -134,7 +136,7 @@ export class BookingService {
     if (seat.status !== 'available') throw new HttpError(409, `Seat is ${seat.status}, cannot book`);
 
     const bookingId = uuidv4();
-    const expiresAt = new Date(Date.now() + config.reservation.ttlSeconds * 1000);
+    const expiresAt = new Date(Date.now() + holdSeconds * 1000);
 
     await client.query(
       `UPDATE seats SET status = 'reserved', reserved_until = $1, version = version + 1 WHERE id = $2`,
@@ -161,7 +163,7 @@ export class BookingService {
       seat: { id: seat.id, seat_number: seat.seat_number, section: seat.section, row_label: seat.row_label },
       expires_at: expiresAt,
       amount,
-      message: `Seat reserved! Complete payment within ${config.reservation.ttlSeconds / 60} minutes.`,
+      message: `Seat reserved! Complete payment within ${Math.round(holdSeconds / 60)} minutes.`,
     };
   }
 
@@ -267,6 +269,7 @@ export class BookingService {
     }
 
     await redis.del(KEYS.reservation(bookingId));
+    await redis.del(KEYS.seatOffers(seatId));
     broadcastSeatUpdate({ event_id: eventId, seat_id: seatId, status: 'booked', seat_number: seatNumber, section });
   }
 
@@ -282,35 +285,66 @@ export class BookingService {
     await this._offerSeatToNextWaiter(eventId, seatId, seatRows[0].seat_number, seatRows[0].section);
   }
 
+  // A freed seat is offered to waiters one at a time, longest-waiting first, each
+  // with a short hold. After a few unanswered offers it goes back on sale for
+  // everyone, so a seat can't sit unsold while it cycles through the queue.
   async _offerSeatToNextWaiter(eventId: string, seatId: string, seatNumber: string, section: string): Promise<void> {
-    const released = await releaseAndNotify(KEYS.seatInventory(eventId), KEYS.waitingQueue(eventId));
+    const seat = { eventId, seatId, seatNumber, section };
+    const queueKey = KEYS.waitingQueue(eventId);
 
-    if (!released) {
-      broadcastSeatUpdate({ event_id: eventId, seat_id: seatId, status: 'available', seat_number: seatNumber, section });
-      return;
+    const offersKey = KEYS.seatOffers(seatId);
+    const offers = await redis.incr(offersKey);
+    await redis.expire(offersKey, 3600);
+    if (offers > config.waitlist.maxOffers) return this._releaseToPublic(seat);
+
+    // Waiters who aren't on the page are skipped but keep their place in line
+    const skipped: { userId: string; joinedAt: number }[] = [];
+    try {
+      for (let i = 0; i < MAX_OFFLINE_SKIPS; i++) {
+        const waiter = await releaseAndNotify(KEYS.seatInventory(eventId), queueKey);
+        if (!waiter) {
+          // Nobody waiting: the script already put the seat back on sale
+          await redis.del(offersKey);
+          broadcastSeatUpdate({ event_id: eventId, seat_id: seatId, status: 'available', seat_number: seatNumber, section });
+          return;
+        }
+
+        if (!(await isUserOnline(waiter.userId))) {
+          skipped.push(waiter);
+          continue;
+        }
+
+        await this._offerToWaiter(waiter.userId, seat);
+        return;
+      }
+      await this._releaseToPublic(seat);
+    } finally {
+      for (const w of skipped) await redis.zadd(queueKey, 'NX', w.joinedAt, w.userId);
     }
+  }
 
-    const waiter = JSON.parse(released) as { userId: string; seatId: string; timestamp: number };
-
+  private async _offerToWaiter(userId: string, seat: FreedSeat): Promise<void> {
+    const { eventId, seatId, seatNumber, section } = seat;
     try {
       const event = await eventService.getEventCached(eventId);
       const amount = event
         ? eventService.calculatePrice(event.base_price, event.available_seats, event.total_seats)
         : 0;
 
-      const idempotencyKey = `waitlist-${eventId}-${waiter.userId}-${Date.now()}`;
+      const holdSeconds = config.waitlist.offerTtlSeconds;
+      const idempotencyKey = `waitlist-${eventId}-${userId}-${Date.now()}`;
       const response = await withTransaction(async (client) => {
-        return this._createBookingInTransaction(client, waiter.userId, { event_id: eventId, seat_id: seatId }, idempotencyKey, amount);
+        return this._createBookingInTransaction(client, userId, { event_id: eventId, seat_id: seatId }, idempotencyKey, amount, holdSeconds);
       });
 
       await redis.setex(
         KEYS.reservation(response.booking_id),
-        config.reservation.ttlSeconds,
-        JSON.stringify({ userId: waiter.userId, seatId, eventId })
+        holdSeconds,
+        JSON.stringify({ userId, seatId, eventId })
       );
 
       broadcastSeatUpdate({ event_id: eventId, seat_id: seatId, status: 'reserved', seat_number: seatNumber, section });
-      notifyWaitlistOffer(waiter.userId, {
+      notifyWaitlistOffer(userId, {
         booking_id: response.booking_id,
         event_id: eventId,
         seat_number: seatNumber,
@@ -318,11 +352,28 @@ export class BookingService {
         expires_at: response.expires_at!,
       });
     } catch (err) {
-      bookingLogger.warn('Failed to reserve for waiter, releasing seat', { user_id: waiter.userId, error: (err as Error).message });
-      await redis.incr(KEYS.seatInventory(eventId));
-      broadcastSeatUpdate({ event_id: eventId, seat_id: seatId, status: 'available', seat_number: seatNumber, section });
+      bookingLogger.warn('Failed to reserve for waiter, releasing seat', { user_id: userId, error: (err as Error).message });
+      await this._releaseToPublic(seat);
     }
   }
+
+  // Puts the seat back on sale and tells everyone still waiting: first to book gets it
+  private async _releaseToPublic({ eventId, seatId, seatNumber, section }: FreedSeat): Promise<void> {
+    await redis.del(KEYS.seatOffers(seatId));
+    await redis.incr(KEYS.seatInventory(eventId));
+    broadcastSeatUpdate({ event_id: eventId, seat_id: seatId, status: 'available', seat_number: seatNumber, section });
+
+    const waiters = await redis.zrange(KEYS.waitingQueue(eventId), 0, -1);
+    notifySeatAvailable(waiters, { event_id: eventId, seat_id: seatId, seat_number: seatNumber, section });
+    bookingLogger.info('Seat released to public', { event_id: eventId, seat_id: seatId, waiters: waiters.length });
+  }
+}
+
+interface FreedSeat {
+  eventId: string;
+  seatId: string;
+  seatNumber: string;
+  section: string;
 }
 
 export const bookingService = new BookingService();

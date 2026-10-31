@@ -102,6 +102,13 @@ export interface WaitlistOffer {
   expires_at: Date;
 }
 
+export interface WaitlistSeatAvailable {
+  event_id: string;
+  seat_id: string;
+  seat_number: string;
+  section: string;
+}
+
 export interface MetricLabels {
   [key: string]: string | number;
 }

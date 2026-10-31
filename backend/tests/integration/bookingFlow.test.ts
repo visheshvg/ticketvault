@@ -4,13 +4,16 @@ import { bookingService } from '../../src/services/booking/bookingService';
 import { eventService } from '../../src/services/event/eventService';
 import { expiryWorker } from '../../src/workers/expiryWorker';
 import { inventoryReconciler } from '../../src/workers/inventoryReconciler';
-import { notifyWaitlistOffer } from '../../src/services/websocket/wsService';
+import { notifyWaitlistOffer, notifySeatAvailable, isUserOnline } from '../../src/services/websocket/wsService';
+import { config } from '../../src/config';
 import { v4 as uuidv4 } from 'uuid';
 
 jest.mock('../../src/services/websocket/wsService', () => ({
   broadcastSeatUpdate: jest.fn(),
   broadcastInventoryUpdate: jest.fn(),
   notifyWaitlistOffer: jest.fn(),
+  notifySeatAvailable: jest.fn(),
+  isUserOnline: jest.fn().mockResolvedValue(true),
 }));
 
 let testEventId: string;
@@ -33,7 +36,7 @@ beforeAll(async () => {
   const event = await eventService.createEvent({
     name: 'Integration Test Event',
     venue: 'Test Venue',
-    total_seats: 10,
+    total_seats: 12,
     base_price: 50,
     starts_at: new Date(Date.now() + 86400000).toISOString(),
     ends_at: new Date(Date.now() + 90000000).toISOString(),
@@ -170,14 +173,14 @@ describe('Expiry worker — races', () => {
     await bookingService.confirmBooking(created.booking_id, 'pay_test');
 
     const queueKey = KEYS.waitingQueue(testEventId);
-    await redis.lpush(queueKey, JSON.stringify({ userId: testUserId, seatId, timestamp: Date.now() }));
+    await redis.zadd(queueKey, Date.now(), testUserId);
     const inventoryBefore = await inventory();
 
     // Worker saw the booking as pending in its scan, but payment landed first
     await expire({ id: created.booking_id, seat_id: seatId, event_id: testEventId, user_id: testUserId });
 
     expect(await inventory()).toBe(inventoryBefore);
-    expect(await redis.llen(queueKey)).toBe(1);
+    expect(await redis.zcard(queueKey)).toBe(1);
     const booking = await pool.query(`SELECT status FROM bookings WHERE id = $1`, [created.booking_id]);
     expect(booking.rows[0].status).toBe('confirmed');
 
@@ -253,7 +256,7 @@ describe('Waitlist handoff', () => {
     await redis.del(queueKey);
 
     const created = await bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: testSeatIds[4] }, `handoff-${uuidv4()}`);
-    await redis.lpush(queueKey, JSON.stringify({ userId: otherUserId, seatId: testSeatIds[4], timestamp: Date.now() }));
+    await redis.zadd(queueKey, Date.now(), otherUserId);
 
     await bookingService.cancelBooking(created.booking_id, testUserId);
 
@@ -262,10 +265,56 @@ describe('Waitlist handoff', () => {
       expect.objectContaining({ event_id: testEventId, booking_id: expect.any(String) })
     );
     const offered = await pool.query(
-      `SELECT status FROM bookings WHERE user_id = $1 AND seat_id = $2 AND status = 'pending'`,
+      `SELECT expires_at FROM bookings WHERE user_id = $1 AND seat_id = $2 AND status = 'pending'`,
       [otherUserId, testSeatIds[4]]
     );
     expect(offered.rows.length).toBe(1);
+
+    // Waitlist offers get the short hold, not the normal 10 minutes
+    const holdMs = new Date(offered.rows[0].expires_at).getTime() - Date.now();
+    expect(holdMs).toBeLessThanOrEqual(config.waitlist.offerTtlSeconds * 1000);
+  });
+
+  it('skips a waiter who is offline but keeps their place in line', async () => {
+    const queueKey = KEYS.waitingQueue(testEventId);
+    await redis.del(queueKey);
+    await redis.zadd(queueKey, 1, testUserId);
+    await redis.zadd(queueKey, 2, otherUserId);
+    (isUserOnline as jest.Mock).mockResolvedValueOnce(false);
+
+    await bookingService.offerSeatToNextWaiter(testEventId, testSeatIds[10]);
+
+    expect(notifyWaitlistOffer).toHaveBeenCalledWith(
+      otherUserId,
+      expect.objectContaining({ event_id: testEventId })
+    );
+    expect(await redis.zrank(queueKey, testUserId)).toBe(0);
+    expect(await redis.zscore(queueKey, testUserId)).toBe('1');
+  });
+
+  it('puts the seat back on sale and alerts the waitlist after too many unanswered offers', async () => {
+    const seatId = testSeatIds[11];
+    const queueKey = KEYS.waitingQueue(testEventId);
+    await redis.del(queueKey);
+    await redis.zadd(queueKey, 1, testUserId);
+    await redis.zadd(queueKey, 2, otherUserId);
+    await redis.set(KEYS.seatOffers(seatId), config.waitlist.maxOffers.toString());
+    await redis.set(KEYS.seatInventory(testEventId), '0');
+
+    await bookingService.offerSeatToNextWaiter(testEventId, seatId);
+
+    expect(await redis.get(KEYS.seatInventory(testEventId))).toBe('1');
+    expect(notifySeatAvailable).toHaveBeenCalledWith(
+      [testUserId, otherUserId],
+      expect.objectContaining({ seat_id: seatId })
+    );
+    expect(await redis.zcard(queueKey)).toBe(2);
+    expect(await redis.exists(KEYS.seatOffers(seatId))).toBe(0);
+    const held = await pool.query(
+      `SELECT 1 FROM bookings WHERE seat_id = $1 AND status = 'pending'`,
+      [seatId]
+    );
+    expect(held.rows.length).toBe(0);
   });
 });
 
@@ -280,5 +329,17 @@ describe('Booking flow — waitlist', () => {
 
     expect(queuedResult.status).toBe('queued');
     expect(queuedResult.queue_position).toBeGreaterThanOrEqual(1);
+  });
+
+  it('keeps one entry per user when they try again while sold out', async () => {
+    await redis.set(KEYS.seatInventory(testEventId), '0');
+    const queueKey = KEYS.waitingQueue(testEventId);
+
+    const first = await bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: testSeatIds[4] }, `again-${uuidv4()}`);
+    const sizeAfterFirst = await redis.zcard(queueKey);
+    const second = await bookingService.createBooking(testUserId, { event_id: testEventId, seat_id: testSeatIds[4] }, `again-${uuidv4()}`);
+
+    expect(second.queue_position).toBe(first.queue_position);
+    expect(await redis.zcard(queueKey)).toBe(sizeAfterFirst);
   });
 });

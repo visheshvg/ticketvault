@@ -14,12 +14,17 @@ return redis.call('DECR', KEYS[1])
 `;
 
 const RELEASE_AND_NOTIFY = `
-local next_user = redis.call('RPOP', KEYS[2])
-if next_user == false then
+local popped = redis.call('ZPOPMIN', KEYS[2])
+if #popped == 0 then
   redis.call('INCR', KEYS[1])
   return nil
 end
-return next_user
+return popped
+`;
+
+const JOIN_WAITLIST = `
+redis.call('ZADD', KEYS[1], 'NX', ARGV[1], ARGV[2])
+return redis.call('ZRANK', KEYS[1], ARGV[2]) + 1
 `;
 
 const CLAIM_IDEMPOTENCY = `
@@ -45,8 +50,18 @@ export async function atomicDecrement(inventoryKey: string): Promise<number> {
   return redis.eval(DECR_IF_POSITIVE, 1, inventoryKey) as Promise<number>;
 }
 
-export async function releaseAndNotify(inventoryKey: string, queueKey: string): Promise<string | null> {
-  return redis.eval(RELEASE_AND_NOTIFY, 2, inventoryKey, queueKey) as Promise<string | null>;
+// Pops the longest-waiting user, or puts the seat back on sale if nobody is waiting
+export async function releaseAndNotify(
+  inventoryKey: string,
+  queueKey: string
+): Promise<{ userId: string; joinedAt: number } | null> {
+  const popped = await redis.eval(RELEASE_AND_NOTIFY, 2, inventoryKey, queueKey) as [string, string] | null;
+  return popped ? { userId: popped[0], joinedAt: Number(popped[1]) } : null;
+}
+
+// Adds the user once (joining again keeps their original place) and returns their position
+export async function joinWaitlist(queueKey: string, userId: string): Promise<number> {
+  return redis.eval(JOIN_WAITLIST, 1, queueKey, Date.now().toString(), userId) as Promise<number>;
 }
 
 export async function claimIdempotencyKey(

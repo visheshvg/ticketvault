@@ -118,7 +118,7 @@ Full k6 output for both runs is in [`docs/k6-100VU.txt`](docs/k6-100VU.txt) and 
 - Browse events with a live seat map
 - Reserve a seat with a 10-minute hold and visible countdown
 - `Idempotency-Key` header on the booking endpoint so client retries never create duplicate bookings. Keys are scoped per user, reusing a key for a different seat returns 422, and a retry that arrives while the first request is still running gets 409 instead of being processed twice
-- Waitlist queue when an event is sold out, with position tracking. When a seat frees up, it's reserved for the next person in line and they get a live alert with a "Pay now" button
+- Waitlist when an event is sold out, with one place per user. A freed seat is offered to people in line one at a time with a short hold, and goes back on sale for everyone if nobody takes it (see [Waitlist](#waitlist))
 - Real-time seat availability updates over WebSocket
 - Simulated payment with success and failure paths; a failure releases the seat back to inventory
 - JWT auth with single-use refresh-token rotation (if a rotated token is reused, the client gets 401). The server refuses to start without `JWT_SECRET`
@@ -150,12 +150,30 @@ What happens when someone clicks "reserve seat":
 
 1. Claim the idempotency key in Redis with `SET NX`. If the same key has been seen recently, the cached response is returned.
 2. Decrement the inventory counter using the Lua script.
-3. If the counter was already 0, push the user onto the waitlist queue and return HTTP 202.
+3. If the counter was already 0, add the user to the waitlist (once, keeping their original place) and return HTTP 202.
 4. Otherwise open a Postgres transaction.
 5. Lock the seat row with `SELECT FOR UPDATE NOWAIT`.
 6. Mark the seat reserved, insert the booking row, and write the audit log entry.
 7. Set the 10-minute reservation TTL in Redis.
 8. Broadcast the seat update over WebSocket so other browsers see it immediately.
+
+---
+
+## Waitlist
+
+When a held seat is released (the holder didn't pay, cancelled, or their payment failed), there are two simple options, and both have a flaw:
+
+- **Offer it to the next person in line and wait for them.** Fair, but if nobody in line is around, the seat can cycle through the whole queue, 10 minutes at a time, and sit unsold for hours.
+- **Put it back on sale for everyone.** Sells fast, but the people who waited longest get no advantage.
+
+TicketVault uses a hybrid:
+
+1. **One place per user.** The waitlist is a Redis sorted set keyed by user, ordered by join time. Joining again keeps your original place.
+2. **Longest-waiting first, short hold.** The freed seat is reserved for the person who has waited longest, for 2 minutes instead of the usual 10, and they get a live alert with a "Pay now" button.
+3. **Skip people who aren't there.** Waiters with no open connection are skipped, but keep their place for the next seat.
+4. **Then open it to everyone.** After 3 unanswered offers, or if the queue runs out, the seat goes back on sale. Everyone still waiting gets an alert, and the first to book gets it.
+
+Worst case, a seat waits about 3 × 2 minutes before anyone can buy it, instead of hours. The hold length and offer limit are set with `WAITLIST_OFFER_TTL_SECONDS` and `WAITLIST_MAX_OFFERS`.
 
 ---
 
@@ -200,7 +218,7 @@ npx jest --testPathPattern="tests/integration"
 npx jest --testPathPattern="tests/e2e"
 ```
 
-All 36 tests pass against a freshly migrated database.
+All 40 tests pass against a freshly migrated database.
 
 ![Test suite output](docs/test-results.png)
 
@@ -242,7 +260,7 @@ ticketvault/
 │   │   │   └── websocket/        Socket.IO with Redis adapter
 │   │   ├── workers/              Reservation expiry, seat counter reconciliation
 │   │   ├── middleware/           auth, rate limit, refresh-token rotation
-│   │   ├── redis/                ioredis client and 5 Lua scripts
+│   │   ├── redis/                ioredis client and 6 Lua scripts
 │   │   └── db/                   Schema, migration, seed
 │   └── tests/                    Unit, integration, end-to-end
 ├── frontend/src/                 React + Vite app

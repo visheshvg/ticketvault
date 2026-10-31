@@ -20,6 +20,8 @@ jest.mock('../../src/services/websocket/wsService', () => ({
   broadcastSeatUpdate: jest.fn(),
   broadcastInventoryUpdate: jest.fn(),
   notifyWaitlistOffer: jest.fn(),
+  notifySeatAvailable: jest.fn(),
+  isUserOnline: jest.fn().mockResolvedValue(true),
 }));
 
 const app = express();

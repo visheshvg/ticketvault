@@ -5,7 +5,7 @@ import { redis } from '../../redis/client';
 import { logger } from '../../utils/logger';
 import jwt from 'jsonwebtoken';
 import { config } from '../../config';
-import { AuthPayload, SeatStatusUpdate, WaitlistOffer } from '../../types';
+import { AuthPayload, SeatStatusUpdate, WaitlistOffer, WaitlistSeatAvailable } from '../../types';
 
 let io: SocketServer | null = null;
 
@@ -79,4 +79,16 @@ export function broadcastInventoryUpdate(eventId: string, remaining: number, cur
 export function notifyWaitlistOffer(userId: string, offer: WaitlistOffer): void {
   if (!io) return;
   io.to(`user:${userId}`).emit('waitlist:offered', offer);
+}
+
+export function notifySeatAvailable(userIds: string[], seat: WaitlistSeatAvailable): void {
+  if (!io || !userIds.length) return;
+  io.to(userIds.map((id) => `user:${id}`)).emit('waitlist:seat_available', seat);
+}
+
+// True if the user has the app open on any server instance
+export async function isUserOnline(userId: string): Promise<boolean> {
+  if (!io) return false;
+  const sockets = await io.in(`user:${userId}`).fetchSockets();
+  return sockets.length > 0;
 }

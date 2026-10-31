@@ -31,7 +31,9 @@ const PREFIX = 'tv:';
 
 export const KEYS = {
   seatInventory: (eventId: string) => `${PREFIX}seat_inventory:${eventId}`,
-  waitingQueue:  (eventId: string) => `${PREFIX}waiting_queue:${eventId}`,
+  // Sorted set: member = userId, score = join time. One entry per user.
+  waitingQueue:  (eventId: string) => `${PREFIX}waitlist:${eventId}`,
+  seatOffers:    (seatId: string) => `${PREFIX}seat_offers:${seatId}`,
   reservation:   (bookingId: string) => `${PREFIX}reservation:${bookingId}`,
   idempotency:   (key: string) => `${PREFIX}idempotency:${key}`,
   rateLimit:     (limiter: string) => `${PREFIX}rate_limit:${limiter}:`,

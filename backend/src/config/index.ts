@@ -39,6 +39,13 @@ export const config = {
     workerIntervalMs: 30000,
   },
 
+  waitlist: {
+    // Waiters get a short hold, so a seat doesn't sit unsold on someone who isn't there
+    offerTtlSeconds: parseInt(process.env.WAITLIST_OFFER_TTL_SECONDS || '120', 10),
+    // After this many unanswered offers the seat goes back on sale for everyone
+    maxOffers: parseInt(process.env.WAITLIST_MAX_OFFERS || '3', 10),
+  },
+
   rateLimit: {
     windowMs: 60_000,
     maxRequests: parseInt(process.env.RATE_LIMIT_MAX || '100', 10),
